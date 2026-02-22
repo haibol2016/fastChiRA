@@ -10,6 +10,12 @@ suppressPackageStartupMessages({
   library(jsonlite)
 })
 
+# batchtools getJobTable() may return done/running/error/expired as POSIXct (timestamps), not logical.
+# sum() on POSIXct fails; count non-NA for timestamps, sum(..., na.rm=TRUE) for logical.
+count_status <- function(x) {
+  if (inherits(x, "POSIXct") || inherits(x, "POSIXt")) sum(!is.na(x)) else sum(as.logical(x), na.rm = TRUE)
+}
+
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) != 2) {
   stop("Usage: Rscript submit_intarna_batchtools.R <config_json> <jobs_json>")
@@ -223,29 +229,24 @@ if (max_parallel < length(ids)) {
       stop(e)
     })
 
-    # Wait for this batch to complete before submitting next batch (if any remain)
-    # Following InPAS pattern: use waitForJobs() for proper batchtools integration
+    # Wait for this batch by polling (avoid waitForJobs() which can trigger sum() on POSIXct in some batchtools versions)
     cat(sprintf("Waiting for batch %d to complete before submitting next batch...\n", batch_idx))
-    # waitForJobs() returns TRUE when all jobs are done, FALSE if timeout/error
-    while (!waitForJobs(ids = batch_ids, sleep = 30, timeout = Inf,
-                        stop.on.error = FALSE, reg = reg)) {
-      # Get status for progress reporting
+    repeat {
       job_table <- getJobTable(ids = batch_ids, reg = reg)
-      batch_done <- sum(job_table$done, na.rm = TRUE)
-      batch_running <- sum(job_table$running, na.rm = TRUE)
-      batch_error <- sum(job_table$error, na.rm = TRUE)
-      batch_expired <- sum(job_table$expired, na.rm = TRUE)
+      batch_done <- count_status(job_table$done)
+      batch_running <- count_status(job_table$running)
+      batch_error <- count_status(job_table$error)
+      batch_expired <- count_status(job_table$expired)
       completed <- batch_done + batch_error + batch_expired
-
+      if (completed >= length(batch_ids)) break
       cat(sprintf("  Batch %d: %d/%d completed (%d done, %d running, %d error). Waiting...\n",
                   batch_idx, completed, length(batch_ids), batch_done, batch_running, batch_error))
-      Sys.sleep(30)  # Additional sleep for progress reporting
+      Sys.sleep(30)
     }
-    # Final status report
     job_table <- getJobTable(ids = batch_ids, reg = reg)
-    batch_done <- sum(job_table$done, na.rm = TRUE)
-    batch_error <- sum(job_table$error, na.rm = TRUE)
-    batch_expired <- sum(job_table$expired, na.rm = TRUE)
+    batch_done <- count_status(job_table$done)
+    batch_error <- count_status(job_table$error)
+    batch_expired <- count_status(job_table$expired)
     cat(sprintf("Batch %d completed (%d done, %d error, %d expired). Proceeding to next batch.\n",
                 batch_idx, batch_done, batch_error, batch_expired))
   }
@@ -262,20 +263,21 @@ if (max_parallel < length(ids)) {
   })
 
   cat("Waiting for all jobs to complete...\n")
-  while (!waitForJobs(ids = ids, sleep = 30, timeout = Inf, stop.on.error = FALSE, reg = reg)) {
+  repeat {
     job_table <- getJobTable(ids = ids, reg = reg)
-    batch_done <- sum(job_table$done, na.rm = TRUE)
-    batch_running <- sum(job_table$running, na.rm = TRUE)
-    batch_error <- sum(job_table$error, na.rm = TRUE)
-    batch_expired <- sum(job_table$expired, na.rm = TRUE)
+    batch_done <- count_status(job_table$done)
+    batch_running <- count_status(job_table$running)
+    batch_error <- count_status(job_table$error)
+    batch_expired <- count_status(job_table$expired)
     completed <- batch_done + batch_error + batch_expired
+    if (completed >= length(ids)) break
     cat(sprintf("  All jobs: %d/%d completed (%d done, %d running, %d error). Waiting...\n",
                 completed, length(ids), batch_done, batch_running, batch_error))
     Sys.sleep(30)
   }
   job_table <- getJobTable(ids = ids, reg = reg)
   cat(sprintf("All jobs completed (%d done, %d error, %d expired).\n",
-              sum(job_table$done, na.rm = TRUE), sum(job_table$error, na.rm = TRUE), sum(job_table$expired, na.rm = TRUE)))
+              count_status(job_table$done), count_status(job_table$error), count_status(job_table$expired)))
 }
 
 job_table <- getJobTable(ids = submitted_ids, reg = reg)

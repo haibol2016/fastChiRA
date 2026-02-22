@@ -844,6 +844,10 @@ suppressPackageStartupMessages({{
   library(batchtools)
   library(jsonlite)
 }})
+# batchtools getJobTable() may return done/running/error as POSIXct; sum() fails on POSIXct
+count_status <- function(x) {{
+  if (inherits(x, "POSIXct") || inherits(x, "POSIXt")) sum(!is.na(x)) else sum(as.logical(x), na.rm=TRUE)
+}}
 
 reg_dir <- "{reg_dir}"
 if (!dir.exists(reg_dir)) {{
@@ -859,10 +863,10 @@ tryCatch({{
   job_table <- getJobTable(reg=reg)
   
   result <- list(
-    done = sum(job_table$done, na.rm=TRUE),
-    running = sum(job_table$running, na.rm=TRUE),
-    error = sum(job_table$error, na.rm=TRUE),
-    queued = sum(job_table$queued, na.rm=TRUE),
+    done = count_status(job_table$done),
+    running = count_status(job_table$running),
+    error = count_status(job_table$error),
+    queued = count_status(job_table$queued),
     total = nrow(job_table),
     status = as.list(status)
   )
