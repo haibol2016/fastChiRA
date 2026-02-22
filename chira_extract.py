@@ -919,9 +919,10 @@ def _parse_intarna_csv_to_hybrids(csv_path, pairs_order=None):
         sys.stderr.write(f"Warning: IntaRNA result file not found: {csv_path}\n")
         return d_hybrids
     with open(csv_path, 'r', encoding='utf-8', errors='replace') as f:
-        lines = f.readlines()
+        # splitlines() handles \n, \r\n, \r so we get one list item per row
+        lines = f.read().splitlines()
     if len(lines) < 2:
-        sys.stderr.write(f"Warning: IntaRNA result file empty or header-only: {csv_path}\n")
+        sys.stderr.write(f"Warning: IntaRNA result file empty or header-only (got {len(lines)} line(s)): {csv_path}\n")
         return d_hybrids
 
     data_lines = [ln for ln in lines[1:] if ln.strip()]
@@ -950,10 +951,7 @@ def _parse_intarna_csv_to_hybrids(csv_path, pairs_order=None):
         pos = start1 + "&" + start2
         val = (dotbracket, pos, energy, end1, end2)
         d_hybrids[(id1, id2)] = val
-        if pairs_order and idx < len(pairs_order):
-            lp1, lp2 = pairs_order[idx][0].strip(), pairs_order[idx][1].strip()
-            if (lp1, lp2) != (id1, id2):
-                d_hybrids[(lp1, lp2)] = val
+
 
     if not d_hybrids and data_lines:
         sys.stderr.write(f"Warning: No valid IntaRNA data rows in {csv_path}. First data line: {data_lines[0][:80]!r}\n")
@@ -1006,6 +1004,7 @@ def finish_hybridization_write(outdir, n, sample_name, batchtools_work_dir, comp
                     dotbracket, pos, energy, end1, end2 = d_hybrids[(lp2, lp1)]
             if len(a) <= CHIMERA_IDX_HYBRID_ENDS:
                 a.extend(["NA"] * (CHIMERA_IDX_HYBRID_ENDS - len(a) + 1))
+            # a is the chimera row (list of columns); assign hybrid fields by integer index
             a[CHIMERA_IDX_SEQUENCES] = seq1 + "&" + seq2
             a[CHIMERA_IDX_HYBRID] = dotbracket
             a[CHIMERA_IDX_HYBRID_POS] = pos
@@ -1142,7 +1141,6 @@ def run_batchtools_hybridization(args, common_intarna_params, batchtools_work_di
     ) for k in range(args.processes)]
     with WorkerPool(n_jobs=args.processes) as pool:
         pool.map(finish_hybridization_write, finish_args, progress_bar=False)
-
 
 def parse_annotations(f_gtf):
     n_exon = 1

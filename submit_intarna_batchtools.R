@@ -223,21 +223,36 @@ if (max_parallel < length(ids)) {
       stop(e)
     })
 
-    if (length(remaining_ids) > 0) {
-      cat(sprintf("Waiting for batch %d to complete...\n", batch_idx))
-      while (!waitForJobs(ids = batch_ids, sleep = 30, timeout = Inf, stop.on.error = FALSE, reg = reg)) {
-        job_table <- getJobTable(ids = batch_ids, reg = reg)
-        cat(sprintf("  %d done, %d running, %d error. Waiting...\n",
-          sum(job_table$done, na.rm = TRUE),
-          sum(job_table$running, na.rm = TRUE),
-          sum(job_table$error, na.rm = TRUE)))
-        Sys.sleep(30)
-      }
+    # Wait for this batch to complete before submitting next batch (if any remain)
+    # Following InPAS pattern: use waitForJobs() for proper batchtools integration
+    cat(sprintf("Waiting for batch %d to complete before submitting next batch...\n", batch_idx))
+    # waitForJobs() returns TRUE when all jobs are done, FALSE if timeout/error
+    while (!waitForJobs(ids = batch_ids, sleep = 30, timeout = Inf,
+                        stop.on.error = FALSE, reg = reg)) {
+      # Get status for progress reporting
+      job_table <- getJobTable(ids = batch_ids, reg = reg)
+      batch_done <- sum(job_table$done, na.rm = TRUE)
+      batch_running <- sum(job_table$running, na.rm = TRUE)
+      batch_error <- sum(job_table$error, na.rm = TRUE)
+      batch_expired <- sum(job_table$expired, na.rm = TRUE)
+      completed <- batch_done + batch_error + batch_expired
+
+      cat(sprintf("  Batch %d: %d/%d completed (%d done, %d running, %d error). Waiting...\n",
+                  batch_idx, completed, length(batch_ids), batch_done, batch_running, batch_error))
+      Sys.sleep(30)  # Additional sleep for progress reporting
     }
+    # Final status report
+    job_table <- getJobTable(ids = batch_ids, reg = reg)
+    batch_done <- sum(job_table$done, na.rm = TRUE)
+    batch_error <- sum(job_table$error, na.rm = TRUE)
+    batch_expired <- sum(job_table$expired, na.rm = TRUE)
+    cat(sprintf("Batch %d completed (%d done, %d error, %d expired). Proceeding to next batch.\n",
+                batch_idx, batch_done, batch_error, batch_expired))
   }
   submitted_ids <- all_submitted
 } else {
-  cat(sprintf("Submitting all %d jobs at once...\n", length(ids)))
+  # Submit all jobs at once (no limit)
+  cat(sprintf("Submitting all %d jobs at once (no max_parallel limit)...\n", length(ids)))
   tryCatch({
     submitJobs(ids, resources = resources, reg = reg)
     submitted_ids <- ids
@@ -247,7 +262,20 @@ if (max_parallel < length(ids)) {
   })
 
   cat("Waiting for all jobs to complete...\n")
-  waitForJobs(ids = ids, sleep = 30, timeout = Inf, stop.on.error = FALSE, reg = reg)
+  while (!waitForJobs(ids = ids, sleep = 30, timeout = Inf, stop.on.error = FALSE, reg = reg)) {
+    job_table <- getJobTable(ids = ids, reg = reg)
+    batch_done <- sum(job_table$done, na.rm = TRUE)
+    batch_running <- sum(job_table$running, na.rm = TRUE)
+    batch_error <- sum(job_table$error, na.rm = TRUE)
+    batch_expired <- sum(job_table$expired, na.rm = TRUE)
+    completed <- batch_done + batch_error + batch_expired
+    cat(sprintf("  All jobs: %d/%d completed (%d done, %d running, %d error). Waiting...\n",
+                completed, length(ids), batch_done, batch_running, batch_error))
+    Sys.sleep(30)
+  }
+  job_table <- getJobTable(ids = ids, reg = reg)
+  cat(sprintf("All jobs completed (%d done, %d error, %d expired).\n",
+              sum(job_table$done, na.rm = TRUE), sum(job_table$error, na.rm = TRUE), sum(job_table$expired, na.rm = TRUE)))
 }
 
 job_table <- getJobTable(ids = submitted_ids, reg = reg)
