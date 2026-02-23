@@ -1361,53 +1361,45 @@ def finalize_output(outdir, temp_file, final_file):
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required I/O, CRL/EM params, optional processes/sql, version."""
     parser = argparse.ArgumentParser(description='Chimeric Read Annotator: quantify mapped loci',
                                      usage='%(prog)s [-h] [-v,--version]',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
+    # Required I/O
     parser.add_argument('-b', '--bed', action='store', dest='bed', required=True,
-                        metavar='', help='Input BED file')
-
+                        metavar='', help='Input BED file (e.g. segments.bed from chira_merge)')
     parser.add_argument('-m', '--merged_bed', action='store', dest='merged_bed', required=True,
-                        metavar='', help='Input merged BED file')
-
+                        metavar='', help='Input merged BED file (e.g. merged.bed from chira_merge)')
     parser.add_argument('-o', '--outdir', action='store', dest='outdir', required=True, metavar='',
-                        help='Output file containing merged alignments')
+                        help='Output directory (writes loci.counts)')
 
+    # CRL / EM parameters
     parser.add_argument('-cs', '--crl_share', action='store', type=chira_utilities.score_float, default=0.7, metavar='',
                         dest='crl_share',
-                        help='Minimum fraction of reads of a locus that must overlap with all CRL loci '
-                             'inorder to merge it into that CRL.')
-
+                        help="""Minimum fraction of reads of a locus that must overlap with all CRL loci
+in order to merge it into that CRL.""")
     parser.add_argument('-ls', '--min_locus_size', action='store', type=int, default=10, metavar='',
                         dest='min_locus_size',
-                        help='Minimum number of reads a locus should have in order to participate in CRL creation.'
-                             'Always set this value relative to your sequencing depth. Setting this to lower leads'
-                             'CRLs of random multimappings Also consider setting the --crl_share option '
-                             'along with this')
-
+                        help="""Minimum number of reads a locus should have to participate in CRL creation.
+Set relative to sequencing depth. Lower values can yield CRLs from random multimappings.
+Consider --crl_share together with this.""")
     parser.add_argument('-e', '--em_threshold', action='store', type=chira_utilities.score_float, default=0.00001, metavar='',
                         dest='em_thresh',
-                        help='The maximum difference of transcripts expression between two consecutive iterations '
-                             'of EM algorithm to converge.')
-
+                        help="""Maximum difference in transcript expression between two consecutive EM iterations
+to declare convergence.""")
     parser.add_argument("-crl", '--build_crls_too', action='store_true', dest='build_crls_too',
-                        help="Create CRLs too")
+                        help='Build CRLs in addition to quantification')
 
+    # Parallelism and optional backends
     parser.add_argument('-p', '--processes', action='store', type=int, default=0, metavar='',
                         dest='num_processes',
-                        help='Number of parallel processes to use for EM algorithm. Use 0 to use all available CPU cores. '
-                             'Default: 0 (use all available cores). Uses MPIRE WorkerPool for parallel processing. '
-                             'for true parallelism (bypasses GIL). MPIRE provides better performance with shared objects. '
-                             'Multi-processing is most beneficial for large datasets (>500 multimapping reads). '
-                             'Set to 1 to disable parallel processing. Install MPIRE with: pip install mpire')
-
+                        help="""Number of parallel processes for EM algorithm. 0 = use all available cores.
+Uses MPIRE WorkerPool. Most beneficial for large datasets (>500 multimapping reads).
+Set to 1 to disable. Install: pip install mpire""")
     parser.add_argument('--use_sqldb', action='store_true', dest='use_sqldb',
-                        help='Use SQLite database backend for large input files. This method uses disk-backed storage '
-                             'instead of loading all data into memory, making it suitable for very large datasets '
-                             '(50GB+ input files). Memory usage: ~8-16GB vs 200-500GB for standard method. '
-                             'Runtime: ~3-8 hours depending on dataset size and number of processes.')
+                        help="""Use SQLite backend for very large inputs (50GB+). Disk-backed; ~8-16GB RAM vs 200-500GB.
+Runtime ~3-8 hours depending on size and -p.""")
 
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {chira_utilities.__version__}')
 

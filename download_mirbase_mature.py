@@ -12,6 +12,11 @@ import sys
 import os
 import requests
 
+# Real-time output when stdout is not a TTY (e.g. batch jobs)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
 
 def download_mirbase_mature(output_file, version=None, timeout=30):
     """
@@ -149,21 +154,21 @@ def cleanup_temp_file(temp_file, keep_file):
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required species/output, optional version/flags, version."""
     parser = argparse.ArgumentParser(
         description='Download species-specific mature miRNA sequences from miRBase',
         usage='%(prog)s [-h] [-v,--version]',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
     parser.add_argument('-s', '--species', action='store', dest='species_code', required=True,
                         metavar='', help='Species code (e.g., hsa=human, mmu=mouse, bta=bovine, rno=rat)')
     parser.add_argument('-o', '--output', action='store', dest='output_file', required=True,
-                        metavar='', help='Output FASTA file for species-specific mature miRNAs')
+                        metavar='', help='Output FASTA for species-specific mature miRNAs')
     parser.add_argument('--mirbase-version', action='store', dest='mirbase_version', default=None,
-                        metavar='', help='miRBase version (e.g., "22.1"). If not specified, downloads CURRENT version')
+                        metavar='', help='miRBase version (e.g., "22.1"). Default: CURRENT')
     parser.add_argument('--keep-full', action='store_true', dest='keep_full',
-                        help='Keep the full mature.fa file after extraction (default: remove)')
+                        help='Keep full mature.fa after extraction (default: remove)')
     parser.add_argument('--timeout', action='store', type=int, dest='timeout', default=30,
                         metavar='', help='Download timeout in seconds (default: 30)')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s 1.0')

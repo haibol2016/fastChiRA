@@ -1901,121 +1901,101 @@ def merge_output_files(args, chimeras_prefix):
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required I/O, references, parallelism, filtering, output, hybridization, batchtools, version."""
     parser = argparse.ArgumentParser(description='Chimeric Read Annotator: extract chimeras',
                                      usage='%(prog)s [-h] [-v,--version]',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
+    # Required I/O
     parser.add_argument('-l', '--loci', action='store', dest='crl_file', required=True,
-                        metavar='', help='Input BED file with alignments')
-
+                        metavar='', help='Input BED file with alignments (e.g. loci.counts from chira_quantify)')
     parser.add_argument('-o', '--out', action='store', dest='outdir', required=True,
                         metavar='', help='Path to output directory')
-
+    parser.add_argument('-n', '--sample_name', action='store', dest='sample_name', required=True,
+                        metavar='', help='Sample name prefix for output files')
+    
+    # Reference FASTA
+    parser.add_argument('-f1', '--ref_fasta1', action='store', dest='ref_fasta1', required=True,
+                        metavar='', help='First priority reference FASTA file')
     parser.add_argument('-g', '--gtf', action='store', dest='f_gtf', required=False,
                         metavar='', help='Annotation GTF file')
+    parser.add_argument('-f2', '--ref_fasta2', action='store', dest='ref_fasta2', required=False,
+                        metavar='', help='Second priority reference FASTA file (e.g. miRNA)')
+    parser.add_argument('-f', '--ref', action='store', dest='f_ref', required=False,
+                        metavar='', help='Reference genomic FASTA (for IntaRNA accessibility)')
 
+    # Parallelism
     parser.add_argument('-p', '--processes', action='store', type=int, default=1, metavar='',
                         dest='processes',
-                        help='Number of processes to use')
+                        help="""Number of processes to use for chimera extraction, hybridization prep/finish, and merging.""")
 
+    # Filtering
     parser.add_argument('-tc', '--tpm_cutoff', action='store', type=chira_utilities.score_float, default=0, metavar='',
                         dest='tpm_cutoff',
-                        help='Transcripts with less than this percentile TPMs will be discarded in '
-                             'the final output. [0, 1) - values >= 1.0 will be clamped to just below 1.0')
-
+                        help="""Transcripts with less than this percentile TPMs will be discarded in
+the final output. [0, 1) - values >= 1.0 will be clamped to just below 1.0.""")
     parser.add_argument('-sc', '--score_cutoff', action='store', type=chira_utilities.score_float, default=0.0, metavar='',
                         dest='score_cutoff',
                         help='Hybrids with less than this score will be discarded in the final output. [0-1.0)')
-
     parser.add_argument('-co', '--chimeric_overlap', action='store', type=int, default=2, metavar='',
                         dest='chimeric_overlap',
                         help='Maximum number of bases allowed between the chimeric segments of a read')
 
-    parser.add_argument("-r", '--hybridize', action='store_true', dest='hybridize',
-                        help="Hybridize the predicted chimeras")
+    # Output options
+    parser.add_argument("-s", '--summarize', action='store_true', dest='summarize',
+                        help="Summarize interactions at loci level")
+    parser.add_argument('-z', '--gzip', action='store_true', dest='compress',
+                        help='Compress output files (chimeras and singletons) with gzip')
 
+    # Hybridization (IntaRNA)
+    parser.add_argument("-r", '--hybridize', action='store_true', dest='hybridize',
+                        help="Run IntaRNA to hybridize the predicted chimeras")
     parser.add_argument("-ns", '--no_seed', action='store_true', dest='no_seed',
                         help="Do not enforce seed interactions")
-
     parser.add_argument("-acc", '--accessibility', type=str, choices=["C", "N"], default='N', required=False,
                         dest='accessibility', metavar='', help='IntaRNA accessibility: C (compute) or N (not)')
-
     parser.add_argument("-m", '--intarna_mode', type=str, choices=["H", "M", "S"], default='H', required=False,
                         dest='intarna_mode', metavar='', help='IntaRNA mode: H (heuristic), M (exact), S (seed-only)')
-
     parser.add_argument('-t', '--temperature', action='store', type=float, default=37, metavar='',
                         dest='temperature',
                         help='IntaRNA temperature parameter in Celsius to setup the VRNA energy parameters')
-
     parser.add_argument('-sbp', '--seed_bp', action='store', type=int, default=5, metavar='',
                         dest='seed_bp', choices=range(2, 20),
                         help='IntaRNA --seedBP parameter: number of inter-molecular base pairs within the seed region')
-
     parser.add_argument('-smpu', '--seed_min_pu', action='store', type=chira_utilities.score_float, default=0,
                         metavar='', dest='seed_min_pu',
-                        help='IntaRNA --seedMinPu parameter: minimal unpaired probability '
-                             '(per sequence) a seed region may have')
-
+                        help="""IntaRNA --seedMinPu parameter: minimal unpaired probability
+(per sequence) a seed region may have.""")
     parser.add_argument('-accw', '--acc_width', action='store', type=int, default=150, metavar='',
                         dest='acc_width', choices=range(0, 99999),
-                        help='IntaRNA --accW parameter:  sliding window size for accessibility computation')
+                        help='IntaRNA --accW parameter: sliding window size for accessibility computation')
 
+    # Batchtools (HPC cluster for IntaRNA)
     parser.add_argument('--use_batchtools', action='store_true', dest='use_batchtools',
-                        help='Use R batchtools to submit IntaRNA jobs to HPC cluster (batch FASTA per chunk). '
-                             'Same pattern as chira_map.py. Requires R with batchtools and IntaRNA on cluster PATH.')
-
+                        help='Use R batchtools to submit IntaRNA jobs to HPC cluster. Requires --hybridize, R with batchtools and IntaRNA on cluster PATH.')
+    parser.add_argument('--intarna_per_pair_only', action='store_true', dest='intarna_per_pair_only',
+                        help="""Run IntaRNA once per locus pair instead of one multi-FASTA run per chunk.
+Use only if multi-FASTA gives empty result.csv. Slower. Default: one IntaRNA run per chunk.""")
+    parser.add_argument('--keep_batchtools_work', action='store_true', dest='keep_batchtools_work',
+                        help='Keep batchtools work dir for debugging. Default: remove after success.')
     parser.add_argument('--batchtools_registry', action='store', dest='batchtools_registry', default=None, metavar='',
                         help='Directory for batchtools registry (default: <outdir>/batchtools_work/registry)')
-
     parser.add_argument('--batchtools_template', action='store', dest='batchtools_template', default='', metavar='',
-                        help='Path to batchtools LSF template file (or "lsf-simple" for built-in). '
-                             'Default: lsf_custom.tmpl next to chira_extract.py if present.')
-
+                        help='Path to batchtools LSF template (or "lsf-simple"). Default: lsf_custom.tmpl if present.')
     parser.add_argument('--batchtools_queue', action='store', dest='batchtools_queue', default='long', metavar='',
                         help='LSF queue name for batchtools jobs (default: long)')
-
     parser.add_argument('--batchtools_cores', action='store', type=int, default=None, metavar='',
                         dest='batchtools_cores',
                         help='Cores per batchtools job and IntaRNA --threads (default: 8)')
-
     parser.add_argument('--batchtools_memory', action='store', dest='batchtools_memory', default=None, metavar='',
                         help='Total memory per job (e.g. 8GB, 64GB). Converted to per-core for LSF.')
-
     parser.add_argument('--batchtools_walltime', action='store', dest='batchtools_walltime', default='48:00', metavar='',
                         help='Walltime per job (e.g. 48:00 or 240:00)')
-
     parser.add_argument('--batchtools_conda_env', action='store', dest='batchtools_conda_env', default=None, metavar='',
                         help='Conda environment path for cluster jobs (optional)')
-
     parser.add_argument('--batchtools_max_parallel', action='store', type=int, default=None, metavar='',
                         dest='batchtools_max_parallel',
                         help='Max concurrent batchtools jobs (default: all chunks at once)')
-
-    parser.add_argument('--keep_batchtools_work', action='store_true', dest='keep_batchtools_work',
-                        help='Keep batchtools work dir (config.json, jobs.json, chunk dirs, registry) for debugging. '
-                             'Default: remove after successful completion.')
-    parser.add_argument('--intarna_per_pair_only', action='store_true', dest='intarna_per_pair_only',
-                        help='Run IntaRNA once per locus pair instead of one multi-FASTA run per chunk. '
-                             'Use only if multi-FASTA gives empty result.csv in your setup. Default: one IntaRNA run per chunk (multi-FASTA).')
-
-    parser.add_argument('-f1', '--ref_fasta1', action='store', dest='ref_fasta1', required=True,
-                        metavar='', help='First priority fasta file')
-
-    parser.add_argument('-f2', '--ref_fasta2', action='store', dest='ref_fasta2', required=False,
-                        metavar='', help='second priority fasta file')
-
-    parser.add_argument('-f', '--ref', action='store', dest='f_ref', required=False,
-                        metavar='', help='Reference fasta file')
-
-    parser.add_argument("-s", '--summarize', action='store_true', dest='summarize',
-                        help="Summarize interactions at loci level")
-
-    parser.add_argument('-n', '--sample_name', action='store', dest='sample_name', required=True,
-                        metavar='', help='Sample name prefix for output files')
-
-    parser.add_argument('-z', '--gzip', action='store_true', dest='compress',
-                        help='Compress output files (chimeras and singletons) with gzip')
 
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {chira_utilities.__version__}')
 

@@ -12,6 +12,11 @@ import argparse
 import sys
 import re
 
+# Real-time output when stdout is not a TTY (e.g. batch jobs)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
 
 def is_mirna_line(line, mirna_pattern=None):
     """
@@ -104,21 +109,22 @@ def compile_mirna_pattern(pattern_str):
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required I/O, optional pattern/flags, version."""
     parser = argparse.ArgumentParser(
         description='Remove all microRNA entries from an Ensembl GTF file',
         usage='%(prog)s [-h] [-v,--version]',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
+    # Required I/O
     parser.add_argument('-i', '--input', action='store', dest='input_gtf', required=True,
                         metavar='', help='Input GTF file')
     parser.add_argument('-o', '--output', action='store', dest='output_gtf', required=True,
                         metavar='', help='Output GTF file (without microRNA entries)')
     parser.add_argument('-p', '--pattern', action='store', dest='mirna_pattern', default=None,
-                        metavar='', help='Regular expression pattern for matching miRNA in GTF attributes. '
-                        'If not provided, only feature type and biotype fields are checked. '
-                        'Example: \'gene_name\\s+"[^"]*(?:[Mm][Ii][Rr][_-]|[^"]*[-_][Mm][Ii][Rr][_-])\'')
+                        metavar='',
+                        help="""Regex for matching miRNA in GTF attributes. If not set, only feature type and biotype are used.
+Example: 'gene_name\\s+"[^"]*(?:[Mm][Ii][Rr][_-]|[^"]*[-_][Mm][Ii][Rr][_-])'""")
     parser.add_argument('--remove-comments', action='store_true', dest='remove_comments',
                         help='Remove comment lines from output (default: keep comments)')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s 1.0')

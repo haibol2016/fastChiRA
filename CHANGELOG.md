@@ -5,6 +5,17 @@ All notable changes to ChiRA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.13] - 2026-02-22
+
+### Fixed
+- **submit_intarna_batchtools.R**: Wait for all batches (including the last) so the main job does not finish while IntaRNA jobs are still running. Replaced `waitForJobs()` with manual polling using `getJobTable()` and status counting to avoid `'sum' not defined for "POSIXt" objects` when batchtools returns POSIXct for done/running/error.
+- **submit_chunks_batchtools.R**: Same POSIXct-safe status counting (`count_status()`) and manual polling instead of `waitForJobs()` when waiting between batches.
+- **chira_map.py**: Embedded R in `query_batchtools_status()` now uses `count_status()` for job table columns so status queries work when batchtools returns POSIXct.
+- **chira_extract.py**: IntaRNA result CSV is read with `f.read().splitlines()` so files with `\r` or `\r\n` line endings are parsed correctly (avoids false "empty or header-only" warning). Parser accepts both `;` and `,` separators and requires at least 8 fields per row.
+
+### Changed
+- **submit_intarna_batchtools.R**, **submit_chunks_batchtools.R**: Added `count_status()` helper: for POSIXct/POSIXt columns count non-NA; otherwise sum logical. All job status counts use this helper. Wait logic uses a repeat loop with `getJobTable()` and `Sys.sleep(30)` instead of `waitForJobs()`.
+
 ## [1.4.12] - 2026-02-20
 
 ### Added

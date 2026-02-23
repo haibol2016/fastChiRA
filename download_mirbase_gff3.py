@@ -22,6 +22,11 @@ import sys
 import os
 import requests
 
+# Real-time output when stdout is not a TTY (e.g. batch jobs)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
 # Optional dependency for coordinate liftover
 try:
     from pyliftover import LiftOver
@@ -426,38 +431,38 @@ def print_download_info(args, liftover_params, chr_mapping):
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required I/O, optional version/timeout, chromosome mapping, liftover, version."""
     parser = argparse.ArgumentParser(
         description='Download species-specific GFF3 file from miRBase',
         usage='%(prog)s [-h] [-v,--version]',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
+    # Required I/O
     parser.add_argument('-s', '--species', action='store', dest='species_code', required=True,
                         metavar='', help='Species code (e.g., hsa=human, mmu=mouse, bta=bovine, rno=rat)')
     parser.add_argument('-o', '--output', action='store', dest='output_file', required=True,
                         metavar='', help='Output GFF3 file for species-specific microRNA annotations')
     parser.add_argument('--mirbase-version', action='store', dest='mirbase_version', default=None,
-                        metavar='', help='miRBase version number (e.g., "21"). If not specified, downloads CURRENT version')
+                        metavar='', help='miRBase version (e.g., "21"). Default: CURRENT')
     parser.add_argument('--timeout', action='store', type=int, dest='timeout', default=60,
                         metavar='', help='Download timeout in seconds (default: 60)')
     parser.add_argument('-m', '--chromosome-mapping', action='store', dest='chr_mapping_file', default=None,
-                        metavar='', help='Tab-separated file with two columns: gff3_chromosome_name<tab>target_chromosome_name. '
-                        'Chromosome names in the GFF3 file will be converted to target names in the output. '
-                        'Applied after coordinate liftover (if performed).')
+                        metavar='',
+                        help="""Tab-separated file: gff3_chromosome_name<tab>target_chromosome_name.
+Applied after liftover (if performed).""")
     parser.add_argument('--source-genome', action='store', dest='source_genome', default=None,
-                        metavar='', help='Source genome assembly name for coordinate liftover (e.g., hg19, hg38, mm9, mm10). '
-                        'Required if --chain-file is provided.')
+                        metavar='',
+                        help="""Source genome assembly for liftover (e.g., hg19, mm9). Required if --chain-file given.""")
     parser.add_argument('--target-genome', action='store', dest='target_genome', default=None,
-                        metavar='', help='Target genome assembly name for coordinate liftover (e.g., hg19, hg38, mm9, mm10). '
-                        'Required if --chain-file is provided.')
+                        metavar='',
+                        help="""Target genome assembly for liftover (e.g., hg38, mm10). Required if --chain-file given.""")
     parser.add_argument('--chain-file', action='store', dest='chain_file', default=None,
-                        metavar='', help='Path to chain file for coordinate liftover. '
-                        'Chain files can be downloaded from UCSC Genome Browser. '
-                        'If provided, --source-genome and --target-genome must also be provided. '
-                        'Requires pyliftover package (install with: pip install pyliftover).')
+                        metavar='',
+                        help="""Path to chain file for coordinate liftover (e.g. from UCSC).
+Requires --source-genome and --target-genome. Needs pyliftover: pip install pyliftover""")
     parser.add_argument('-v', '--version', action='version', version='%(prog)s 1.0')
-    
+
     return parser.parse_args()
 
 

@@ -1,13 +1,14 @@
 # ChiRA - Chimeric Read Analyzer
 
-**Version**: 1.4.11 (Modified with performance optimizations and parallel computing support)
+**Version**: 1.4.13 (Modified with performance optimizations and parallel computing support)
 
 ChiRA is a set of tools to analyze RNA-RNA interactome experimental data such as CLASH, CLEAR-CLIP, PARIS, SPLASH etc. Following are the descriptions of the each tool. Here we provide descriptions about the input and ouptput files. For the detailed description of the other parameters please look at the help texts of tools.
 
-**Note**: This is a modified version of ChiRA (based on v1.4.3) with significant performance optimizations and new features. The original code is licensed under GPL v3, and this modified version maintains the same license. All changes are documented in the "Recent Improvements" section below and in [CHANGELOG.md](CHANGELOG.md).
+**Note**: fastChiRA is a modified version of ChiRA (based on v1.4.3) with significant performance optimizations and new features. The original code is licensed under GPL v3, and this modified version maintains the same license. All changes are documented in the "Recent Improvements" section below and in [CHANGELOG.md](CHANGELOG.md).
 
 ## Version History
-- **v1.4.11** (Current, 2026-02-17): MPIRE made required dependency for optimal multiprocessing performance, removed fallback code, improved memory efficiency (50-90% reduction) and startup time (2-3x faster)
+- **v1.4.13** (Current, 2026-02-21): Batchtools/IntaRNA fixes: wait for all batches (including last), POSIXct-safe job status counting and manual polling in R scripts, CSV line-ending handling in chira_extract
+- **v1.4.11** (2026-02-17): MPIRE made required dependency for optimal multiprocessing performance, removed fallback code, improved memory efficiency (50-90% reduction) and startup time (2-3x faster)
 - **v1.4.10** (2026-02-15): Fixed batchtools submission issues (template path handling, JSON parsing), ensured all paths are absolute for cluster jobs, and refactored scripts for better code organization
 - **v1.4.9** (2026-02-15): Added `--parallel_chunks` parameter for configurable chunk parallelism in chira_map.py
 - **v1.4.8** (2026-02-15): Improved chunk-based parallelization for very large transcript counts (e.g., human genome with 387K+ transcripts), variable naming consistency improvements, and bug fixes in chira_merge.py
@@ -105,28 +106,28 @@ For complete details with line-by-line changes, please refer to [CHANGELOG.md](C
 **The easiest way to use ChiRA is with the provided container images**, which include all dependencies pre-installed:
 
 **Pre-built Docker Image Available:**
-A functional Docker image is available at: **`docker.io/nemat1976/chiraplus:v0.0.1`**
+A functional Docker image is available at: **`docker.io/nemat1976/chiraplus:v0.0.2`**
 
 This image includes all dependencies and is ready to use. Simply pull and run:
 
 **Docker:**
 ```bash
 # Pull the image (first time only)
-docker pull docker.io/nemat1976/chiraplus:v0.0.1
+docker pull docker.io/nemat1976/chiraplus:v0.0.2
 
 # Run ChiRA commands
 docker run --rm -v $(pwd)/data:/app/data -v $(pwd)/output:/app/output \
-  docker.io/nemat1976/chiraplus:v0.0.1 chira_collapse.py -i data/input.fastq -o output/collapsed.fasta
+  docker.io/nemat1976/chiraplus:v0.0.2 chira_collapse.py -i data/input.fastq -o output/collapsed.fasta
 ```
 
 **Singularity/Apptainer (for HPC systems):**
 ```bash
 # Pull image
-singularity pull docker://docker.io/nemat1976/chiraplus:v0.0.1
+singularity pull docker://docker.io/nemat1976/chiraplus:v0.0.2
 
 # Run ChiRA commands (entrypoint script handles environment automatically)
 singularity exec -B $(pwd)/data:/app/data -B $(pwd)/output:/app/output \
-  chira_latest.sif chira_collapse.py -i data/input.fastq -o output/collapsed.fasta
+ chiraplus_v0.0.2.sif chira_collapse.py -i data/input.fastq -o output/collapsed.fasta
 ```
 
 For detailed Singularity/Apptainer setup and usage instructions, see [SINGULARITY_SETUP.md](SINGULARITY_SETUP.md).
@@ -188,8 +189,9 @@ If you prefer to install dependencies manually:
 - pyliftover (for `download_mirbase_gff3.py` coordinate liftover)
 
 **R packages (for batchtools HPC cluster support):**
-- **batchtools** (required for `--use_batchtools` option in `chira_map.py`)
+- **batchtools** (required for `--use_batchtools` in `chira_map.py` and for hybridization in `chira_extract.py`)
   - Purpose: Submitting chunk-based batch jobs to HPC cluster schedulers (LSF, SLURM, SGE, etc.)
+  - Used by: `submit_chunks_batchtools.R` (mapping), `submit_intarna_batchtools.R` (IntaRNA hybridization)
   - Install with: `conda install -c conda-forge r-batchtools` or `install.packages("batchtools")` in R
   - Benefits: Enables distributing chunk processing across multiple cluster nodes for true parallel computing
 - **jsonlite** (required for batchtools JSON configuration parsing)
@@ -345,7 +347,7 @@ chira_map.py -i collapsed_reads.fasta -o mapping_output \
    -f1 target_transcriptome.fasta -f2 mature_mirna_hsa.fasta \
    -b -a bwa -p 8 --chunk_fasta 4 \
   --parallel_chunks 4 --use_batchtools --batchtools_queue long \
-  --batchtools_core 8 --batchtools_memory 64GB \
+  --batchtools_cores 8 --batchtools_memory 64GB \
   --batchtools_walltime 48:00 -s fw \
   --batchtools_max_parallel 4 --batchtools_conda_env ~/miniconda3/envs/chira
 ```
@@ -440,17 +442,16 @@ docker build -t chira:latest .
 - Handles UMI-tagged reads (optional UMI trimming from 5' end)
 - Counts occurrences of each unique sequence
 - Fast raw file parsing (no Biopython dependency)
+- Accepts gzipped or uncompressed FASTQ
 
-**Required Inputs:**
-- `-i, --fastq`: Quality and adapter trimmed FASTQ file
+**Required Arguments:**
+- `-i, --fastq`: Input FASTQ file (gzipped or uncompressed)
+- `-o, --fasta`: Output FASTA file
 
-**Optional Parameters:**
-- `-u, --umi_len`: Length of UMI to trim from 5' end of each read (default: 0, no UMI)
+**Optional Arguments:**
+- `-u, --umi_len`: Length of UMI to trim from 5' end of each read and append to the tag id (default: 0, no UMI)
 
-**Outputs:**
-- `-o, --fasta`: FASTA file with unique sequences
-  - Header format: `>sequence_id|UMI|read_count` (or `>sequence_id|read_count` if no UMI)
-  - Each unique sequence appears once with its total count
+**Output:** FASTA with unique sequences. Header format: `>sequence_id|UMI|read_count` (or `>sequence_id|read_count` if no UMI). Each unique sequence appears once with its total count.
 
 **Usage Example:**
 ```bash
@@ -470,12 +471,12 @@ chira_collapse.py -i input.fastq -o output.fasta -u 12
 - Handles chimeric reads with configurable overlap between segments
 - Automatic index building option
 
-**Required Inputs:**
-- `-i, --query_fasta`: FASTA file containing reads (typically from `chira_collapse.py`)
+**Required Arguments:**
+- `-i, --query_fasta`: Path to query FASTA file (reads, typically from chira_collapse.py)
 - `-o, --outdir`: Output directory for BAM and BED files
 - Either `-x1, --index1` (pre-built index) or `-f1, --ref_fasta1` (reference FASTA to build index)
 
-**Optional Inputs:**
+**Optional Arguments:**
 - `-x2, --index2`: Second priority index file (for split-reference)
 - `-f2, --ref_fasta2`: Second priority reference FASTA file
 - `-b, --build`: Build indices from reference FASTA files
@@ -545,10 +546,7 @@ A split reference uses two separate reference FASTA files instead of one combine
   - **Performance**: 2-4x faster for large BAM files and sorting operations
   - **Memory optimization**: Use `--sort_memory` to specify memory per thread (e.g., "2G", "3G"), or install `psutil` for automatic optimization
   - **Recommendation**: Set to total number of CPU cores for optimal performance
-- `--sort_memory`: Memory per thread for BAM sorting (e.g., "2G", "3G", optional)
-  - If not specified, automatically calculates based on available RAM (requires `psutil`)
-  - Falls back to safe default (2GB per thread) if `psutil` unavailable
-  - **Note**: Total memory used = sort_memory × processes, so ensure sufficient RAM
+- `--sort_memory`: Memory per thread for BAM sorting (e.g. "2G", "3G"). If not set, auto-calculated from available RAM. Total memory = sort_memory × processes.
 - `--chunk_fasta`: Split input FASTA into N chunks for parallel processing (optional, recommended for very large files >1GB)
   - **How it works**: 
     - Creates N chunks from the input FASTA file
@@ -578,15 +576,8 @@ A split reference uses two separate reference FASTA files instead of one combine
   - See "R packages" section above for installation instructions
   - **Benefits**: Submit chunk jobs to cluster scheduler for true parallel processing across cluster nodes
   - **Path handling**: All file paths are automatically converted to absolute paths for cluster job execution
-  - **Additional parameters** (required when `--use_batchtools` is specified):
-    - `--batchtools_queue`: LSF queue name (e.g., `long`, `short`)
-    - `--batchtools_cores`: Cores per LSF job (e.g., `8`)
-    - `--batchtools_memory`: Total memory per LSF job (e.g., `8GB`, automatically converted to per-core for LSF)
-    - `--batchtools_walltime`: Walltime limit per job (e.g., `240:00`)
-    - `--batchtools_max_parallel`: Max concurrent running jobs (optional, default: unlimited)
-    - `--batchtools_conda_env`: Conda environment path (optional, auto-detected if not specified)
-    - `--batchtools_template`: LSF template file path (optional, default: `lsf_custom.tmpl`, can use built-in `"lsf-simple"`)
-  - **Example**: See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md) for detailed usage instructions and examples
+  - **Batchtools options** (when `--use_batchtools` is used): `--batchtools_queue` (default: long), `--batchtools_cores` (default: 8), `--batchtools_memory`, `--batchtools_walltime` (default: 240:00), `--batchtools_max_parallel`, `--batchtools_conda_env`, `--batchtools_template` (default: lsf_custom.tmpl or "lsf-simple")
+  - See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md) for detailed usage and examples
 
 **Outputs:**
 - `sorted.bam`: Sorted BAM file
@@ -681,30 +672,26 @@ When using `--chunk_fasta`, the script uses a two-stage approach:
 - Two merging modes: segment-based or block-based (using Blockbuster)
 - Filters by minimum locus size
 
-**Required Inputs:**
-- `-b, --bed`: Input BED file containing alignments (from `chira_map.py`)
-- `-o, --outdir`: Output directory
+**Required Arguments:**
+- `-b, --bed`: Input BED file with alignments (e.g. from chira_map)
+- `-o, --outdir`: Output directory for merged BED and segments
 
-**Optional Inputs:**
-- `-g, --gtf`: Annotation GTF/GFF file for coordinate conversion
-- `-f1, --ref_fasta1`: First priority reference FASTA file
-- `-f2, --ref_fasta2`: Second priority reference FASTA file
+**Optional Arguments:**
+- `-g, --gtf`: Annotation GTF file for coordinate conversion
+- `-f1, --ref_fasta1`: First priority reference FASTA
+- `-f2, --ref_fasta2`: Second priority reference FASTA
 
 **Key Parameters:**
-- `-so, --segment_overlap`: Minimum overlap fraction to merge segments (default: 0.7)
-- `-ao, --alignment_overlap`: Minimum overlap fraction to merge alignments (default: 0.7)
-- `-lt, --length_threshold`: Minimum alignment length as fraction of longest (default: 0.9)
+- `-ao, --alignment_overlap`: Minimum fraction overlap among BED entries to merge [0–1.0] (default: 0.7)
+- `-so, --segment_overlap`: Merge read positions with greater than this overlap into a segment (default: 0.7)
+- `-lt, --length_threshold`: Minimum alignment length as fraction of longest [0.8–1.0] (default: 0.9)
 - `-co, --chimeric_overlap`: Max bases between chimeric segments (default: 2)
 - `-c, --chimeric_only`: Consider only chimeric reads for merging
-- `-ls, --min_locus_size`: Minimum alignments per merged locus (default: 1)
+- `-ls, --min_locus_size`: Minimum number of alignments per merged locus (default: 1)
 - `-bb, --block_based`: Use Blockbuster for block-based merging
-- Blockbuster parameters: `-d, --distance`, `-mc, --min_cluster_height`, `-mb, --min_block_height`, `-sc, --scale`
-- `-p, --processes`: Number of parallel processes for transcript processing (default: None, auto-detects CPU count)
-  - **Chunk-based multiprocessing**: Groups transcripts into chunks (~1000 transcripts per chunk) and processes chunks in parallel
-  - **Scalability**: Efficiently handles very large datasets (e.g., human genome with 387K+ transcripts)
-  - **Performance**: 4-8x faster for datasets with many transcripts
-  - **Note**: Changed from `-t, --threads` in v1.4.6 to reflect multiprocessing implementation
-  - **Optimization**: For human genome (387K transcripts), creates ~388 manageable chunks instead of processing each transcript individually, reducing overhead significantly
+- Blockbuster parameters: `-d, --distance` (default: 30), `-mc, --min_cluster_height` (default: 10), `-mb, --min_block_height` (default: 10), `-sc, --scale` (default: 0.1)
+- `-p, --processes`: Number of parallel processes for transcript processing (default: auto-detect CPU count)
+  - Chunk-based multiprocessing; efficiently handles very large datasets (e.g., human genome with 387K+ transcripts). 4–8x faster for datasets with many transcripts.
 
 **Outputs:**
 - `segments.bed`: A BED file with reads categorized into segments
@@ -733,21 +720,19 @@ chira_merge.py -b mapped.bed -o output_dir -g annotation.gtf -f1 ref1.fasta -ao 
 - TPM normalization for expression quantification
 - Configurable CRL building thresholds
 
-**Required Inputs:**
-- `-b, --bed`: Input BED file containing alignment segments (segments.bed from `chira_merge.py`)
-- `-m, --merged_bed`: Input merged BED file (merged.bed from `chira_merge.py`)
-- `-o, --outdir`: Output directory
+**Required Arguments:**
+- `-b, --bed`: Input BED file (e.g. segments.bed from chira_merge)
+- `-m, --merged_bed`: Input merged BED file (e.g. merged.bed from chira_merge)
+- `-o, --outdir`: Output directory (writes loci.counts)
 
 **Key Parameters:**
 - `-cs, --crl_share`: Minimum fraction of locus reads that must overlap with all CRL loci to merge (default: 0.7)
 - `-ls, --min_locus_size`: Minimum reads per locus to participate in CRL creation (default: 10)
-- `-e, --em_threshold`: EM algorithm convergence threshold (default: 0.00001)
-- `-crl, --build_crls_too`: Create CRLs in addition to quantification
-- `-p, --processes`: Number of processes for parallel processing (default: 1, use 0 for all available cores)
-  - **Multiprocessing**: Uses MPIRE WorkerPool to parallelize EM algorithm E-step (multimapped reads) and aggregation step (bypasses Python GIL)
-  - **MPIRE benefits**: 50-90% memory reduction, 2-3x faster startup, better performance (required dependency)
-  - **Performance**: 2-8x faster for large datasets with many multimapping reads
-  - **Automatic**: Falls back to sequential processing for small datasets (<500 reads or num_processes × 50) to avoid process overhead
+- `-e, --em_threshold`: Max difference in transcript expression between consecutive EM iterations for convergence (default: 0.00001)
+- `-crl, --build_crls_too`: Build CRLs in addition to quantification
+- `-p, --processes`: Number of parallel processes for EM (default: 0 = use all available cores)
+  - Uses MPIRE WorkerPool; 50–90% memory reduction, 2–3x faster startup. Falls back to sequential for very small datasets.
+- `--use_sqldb`: Use SQLite backend for very large inputs (50GB+). Disk-backed; lower RAM (~8–16GB) vs in-memory (200–500GB).
 
 **Outputs:**
 - `loci.counts`: Tabular file containing reads, their CRLs, and TPM values
@@ -756,11 +741,11 @@ chira_merge.py -b mapped.bed -o output_dir -g annotation.gtf -f1 ref1.fasta -ao 
 
 **Usage Example:**
 ```bash
-# Basic usage with 8 threads
-chira_quantify.py -b segments.bed -m loci.txt -o output_dir -cs 0.7 -ls 10 -t 8
+# Basic usage with 8 processes
+chira_quantify.py -b segments.bed -m merged.bed -o output_dir -cs 0.7 -ls 10 -p 8
 
 # Use all available CPU cores automatically
-chira_quantify.py -b segments.bed -m loci.txt -o output_dir -cs 0.7 -ls 10 -t 0
+chira_quantify.py -b segments.bed -m merged.bed -o output_dir -cs 0.7 -ls 10 -p 0
 ```
 
 ---
@@ -776,66 +761,77 @@ chira_quantify.py -b segments.bed -m loci.txt -o output_dir -cs 0.7 -ls 10 -t 0
 - Identifies miRNA vs target loci based on annotation
 - Customizable output file names with sample name prefix
 
-**Required Inputs:**
-- `-l, --loci`: Tabular file containing CRL information ('loci.counts' from `chira_quantify.py`)
+**Required Arguments:**
+- `-l, --loci`: Input BED file with alignments (e.g. loci.counts from chira_quantify)
 - `-o, --out`: Output directory path
+- `-n, --sample_name`: Sample name prefix for output files
 - `-f1, --ref_fasta1`: First priority reference FASTA file
-- `-n, --sample_name`: Sample name prefix for output files (required)
-
-**Optional Inputs:**
-- `-g, --gtf`: Annotation GTF/GFF file for locus annotation including miRBase gff3 for mature miRNA.
-- `-f2, --ref_fasta2`: Second priority reference FASTA file
-- `-f, --ref`: Reference genomic FASTA file 
+- `-g, --gtf`: Annotation GTF file (including miRBase GFF3 for mature miRNA)
+- `-f2, --ref_fasta2`: Second priority reference FASTA (e.g. miRNA)
+- `-f, --ref`: Reference genomic FASTA (for IntaRNA accessibility)
 
 **Key Parameters:**
-- `-r, --hybridize`: Enable RNA-RNA hybridization prediction (IntaRNA)
-- `-tc, --tpm_cutoff`: TPM percentile cutoff for filtering (default: 0)
-- `-sc, --score_cutoff`: Hybridization score cutoff (default: 0.0)
+- `-p, --processes`: Number of processes for extraction and hybridization prep/finish (default: 1)
+- `-tc, --tpm_cutoff`: Discard transcripts below this TPM percentile (default: 0)
+- `-sc, --score_cutoff`: Discard hybrids below this score [0–1.0] (default: 0.0)
 - `-co, --chimeric_overlap`: Max bases between chimeric segments (default: 2)
-- `-ns, --no_seed`: Do not enforce seed interactions
-- `-m, --intarna_mode`: IntaRNA mode (`H`=heuristic, `M`=exact, `S`=seed-only, default: `H`)
-- `-t, --temperature`: Temperature in Celsius for energy parameters (default: 37)
-- `-sbp, --seed_bp`: Number of base pairs in seed region (default: 5)
-- `-acc, --accessibility`: Compute accessibility (`C` or `N`, default: `N`)
-- `-p, --processes`: Number of parallel processes (default: 1)
 - `-s, --summarize`: Summarize interactions at locus level
-- `-z, --gzip`: Compress output files (chimeras and singletons) with gzip (optional)
+- `-z, --gzip`: Compress output files (chimeras and singletons) with gzip
+
+**IntaRNA / hybridization (requires `-r, --hybridize`):**
+- `-r, --hybridize`: Run IntaRNA to hybridize predicted chimeras
+- `-ns, --no_seed`: Do not enforce seed interactions
+- `-acc, --accessibility`: IntaRNA accessibility: `C` (compute) or `N` (not) (default: `N`)
+- `-m, --intarna_mode`: IntaRNA mode: `H` (heuristic), `M` (exact), `S` (seed-only) (default: `H`)
+- `-t, --temperature`: IntaRNA temperature in Celsius (default: 37)
+- `-sbp, --seed_bp`: IntaRNA --seedBP: base pairs in seed region (default: 5)
+- `-smpu, --seed_min_pu`: IntaRNA --seedMinPu: minimal unpaired probability in seed (default: 0)
+- `-accw, --acc_width`: IntaRNA --accW: sliding window size for accessibility (default: 150)
+
+**Batchtools (HPC cluster, requires `--hybridize`):**
+- `--use_batchtools`: Submit IntaRNA jobs via R batchtools. Requires R with batchtools and IntaRNA on cluster PATH. See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md).
+- `--intarna_per_pair_only`: Run IntaRNA once per locus pair instead of one multi-FASTA run per chunk (use if multi-FASTA gives empty result.csv).
+- `--keep_batchtools_work`: Keep batchtools work dir after success (default: remove).
+- `--batchtools_registry`: Registry directory (default: `<outdir>/batchtools_work/registry`).
+- `--batchtools_template`: LSF template path or `"lsf-simple"` (default: lsf_custom.tmpl if present).
+- `--batchtools_queue`: LSF queue (default: long).
+- `--batchtools_cores`: Cores per job and IntaRNA --threads (default: 8).
+- `--batchtools_memory`: Total memory per job (e.g. 8GB, 64GB). Converted to per-core for LSF.
+- `--batchtools_walltime`: Walltime per job (default: 48:00).
+- `--batchtools_conda_env`: Conda environment for cluster jobs (optional).
+- `--batchtools_max_parallel`: Max concurrent batchtools jobs (default: all chunks at once).
 
 **Outputs:**
 
 **Note:** If `--gzip` is specified, output files will have `.gz` extension (e.g., `{sample_name}.chimeras.txt.gz`, `{sample_name}.singletons.txt.gz`). Compression is applied only to final merged files, not intermediate files, for optimal performance.
 
-**1. `{sample_name}.chimeras.txt`** (or `.txt.gz` if `--gzip` is used) - Tabular file with chimeric read information in an extended BED format
+**1. `{sample_name}.chimeras.txt`** (or `.txt.gz` if `--gzip` is used) - Tabular file with chimeric read information in an extended BED format (tab-separated).
 
-Header columns (34 total):
+**Header line (35 columns when using hybridization):**
+```
+read_id	transcript_id_1	transcript_id_2	gene_id_1	gene_id_2	gene_symbol_1	gene_symbol_2	annotation_region_1	annotation_region_2	transcript_start_1	transcript_end_1	transcript_strand_1	transcript_length_1	transcript_start_2	transcript_end_2	transcript_strand_2	transcript_length_2	read_alignment_info	genomic_coordinates_1	genomic_coordinates_2	locus_id_1	locus_id_2	crl_group_id_1	crl_group_id_2	tpm_1	tpm_2	alignment_score_1	alignment_score_2	combined_alignment_score	hybridized_sequences	hybridization_structure	hybridization_positions	hybridization_mfe_kcal_mol	mirna_read_position	hybridization_ends
+```
+
+**Column descriptions:**
 - `read_id`: Read identifier (from collapsed FASTQ)
 - `transcript_id_1`, `transcript_id_2`: Transcript IDs for locus 1 and locus 2
 - `gene_id_1`, `gene_id_2`: Gene IDs for locus 1 and locus 2
 - `gene_symbol_1`, `gene_symbol_2`: Gene symbols for locus 1 and locus 2
-- `annotation_region_1`, `annotation_region_2`: Annotation regions (e.g., `3p_mature_mir`, `5p_mature_mir`, `mature_mir` for miRNA; gene/exon types for targets)
-- `transcript_start_1`, `transcript_end_1`, `transcript_strand_1`: Transcriptomic coordinates for locus 1
-- `transcript_length_1`: Alignment length for locus 1
-- `transcript_start_2`, `transcript_end_2`, `transcript_strand_2`: Transcriptomic coordinates for locus 2
-- `transcript_length_2`: Alignment length for locus 2
-- `read_alignment_info`: Read alignment information (format: `arm1_start,arm1_end,arm2_start,arm2_end,read_length`)
-  - Contains positions of both alignment arms within the read sequence
-  - **Use to determine actual read orientation**: Compare `arm1_start` vs `arm2_start`
-    - If `arm1_start < arm2_start`: Read is 5' locus1 → locus2 3'
-    - If `arm2_start < arm1_start`: Read is 5' locus2 → locus1 3' (reoriented in output for split reference)
+- `annotation_region_1`, `annotation_region_2`: Annotation regions (e.g. `3p_mature_mir`, `5p_mature_mir`, `mature_mir` for miRNA; gene/exon types for targets)
+- `transcript_start_1`, `transcript_end_1`, `transcript_strand_1`, `transcript_length_1`: Transcriptomic coordinates and alignment length for locus 1
+- `transcript_start_2`, `transcript_end_2`, `transcript_strand_2`, `transcript_length_2`: Transcriptomic coordinates and alignment length for locus 2
+- `read_alignment_info`: Format `arm1_start,arm1_end,arm2_start,arm2_end,read_length`. Use to determine actual read orientation (compare `arm1_start` vs `arm2_start`: if `arm1_start < arm2_start` then 5' locus1 → locus2 3'; if `arm2_start < arm1_start` then 5' locus2 → locus1 3')
 - `genomic_coordinates_1`, `genomic_coordinates_2`: Genomic coordinates (if GTF provided)
-- `locus_id_1`, `locus_id_2`: Locus identifiers in format `chr:start:end:strand`
+- `locus_id_1`, `locus_id_2`: Locus identifiers (`chr:start:end:strand`)
 - `crl_group_id_1`, `crl_group_id_2`: CRL group IDs
-- `tpm_1`, `tpm_2`: TPM (Transcripts Per Million) values for each locus
-- `alignment_score_1`, `alignment_score_2`: Alignment scores for each locus
-- `combined_alignment_score`: Combined score (score1 × score2)
-- `hybridized_sequences`: Hybridized sequences (format: `sequence1&sequence2`, or `NA` if not hybridized)
-- `hybridization_structure`: Dot-bracket notation for RNA-RNA hybridization structure (or `NA`)
-- `hybridization_positions`: Hybridization position information (or `NA`)
-- `hybridization_mfe_kcal_mol`: Minimum free energy of hybridization in kcal/mol (or `NA`)
-- `mirna_read_position`: Indicates whether miRNA is at the 5' or 3' end of the read
-  - `miRNA_first`: miRNA is at the 5' end (5' miRNA → target 3')
-  - `miRNA_last`: miRNA is at the 3' end (5' target → miRNA 3')
-  - `NA`: Neither locus is annotated as miRNA (rare, may occur in non-split reference scenarios)
+- `tpm_1`, `tpm_2`: TPM (Transcripts Per Million) for each locus
+- `alignment_score_1`, `alignment_score_2`, `combined_alignment_score`: Alignment scores (combined = score1 × score2)
+- `hybridized_sequences`: `sequence1&sequence2` or `NA`
+- `hybridization_structure`: Dot-bracket RNA-RNA structure or `NA`
+- `hybridization_positions`: Hybridization position information or `NA`
+- `hybridization_mfe_kcal_mol`: Minimum free energy (kcal/mol) or `NA`
+- `mirna_read_position`: `miRNA_first` (5' miRNA → target 3'), `miRNA_last` (5' target → miRNA 3'), or `NA`
+- `hybridization_ends`: Hybridization end positions or `NA`
 
 **Note on chimeric read orientation:**
 The tool detects chimeric reads in both orientations:
@@ -846,21 +842,21 @@ For **split reference** (when `-f2` is provided), the output is standardized so 
 - `locus1` always corresponds to the first reference (typically miRNA from `ref_fasta1`)
 - `locus2` always corresponds to the second reference (typically target from `ref_fasta2`)
 
-**To determine the actual read orientation**, check the `read_info` field:
-- The `read_info` field contains: `arm1_start,arm1_end,arm2_start,arm2_end,read_length`
+**To determine the actual read orientation**, check the `read_alignment_info` column:
+- It contains: `arm1_start,arm1_end,arm2_start,arm2_end,read_length`
 - Compare the start positions:
   - If `arm1_start < arm2_start`: The read is in **5' locus1 → locus2 3'** orientation
   - If `arm2_start < arm1_start`: The read is in **5' locus2 → locus1 3'** orientation (reoriented in output for split reference)
 
 **Example:**
-- If `read_info = "1,20,21,40,50"`: arm1 starts at position 1, arm2 starts at position 21 → Read is 5' locus1 → locus2 3'
-- If `read_info = "21,40,1,20,50"`: arm2 starts at position 1, arm1 starts at position 21 → Read is 5' locus2 → locus1 3' (original orientation was target → miRNA, but output shows miRNA → target)
+- If `read_alignment_info = "1,20,21,40,50"`: arm1 starts at position 1, arm2 at 21 → Read is 5' locus1 → locus2 3'
+- If `read_alignment_info = "21,40,1,20,50"`: arm2 starts at position 1, arm1 at 21 → Read is 5' locus2 → locus1 3' (reoriented in output for split reference)
 
-In the **interactions file**, both orientations are merged into a single entry to avoid duplicates, but the `read_info` field in the chimeras file preserves the actual orientation information.
+In the **interactions file**, both orientations are merged into a single entry; the chimeras file column `read_alignment_info` preserves the actual orientation.
 
-**2. `{sample_name}.singletons.txt`** (or `.txt.gz` if `--gzip` is used) - Tabular file with singleton reads (non-chimeric alignments)
+**2. `{sample_name}.singletons.txt`** (or `.txt.gz` if `--gzip` is used) - Tabular file with singleton reads (non-chimeric alignments).
 
-Header columns (14 total):
+Header columns (14 total, tab-separated):
 - `read_id`: Read identifier
 - `transcript_id`: Transcript ID
 - `gene_id`: Gene ID
@@ -870,14 +866,14 @@ Header columns (14 total):
 - `transcript_length`: Alignment length
 - `read_alignment_info`: Read alignment information
 - `genomic_coordinates`: Genomic coordinates (if GTF provided)
-- `locus_id`: Locus identifier in format `chr:start:end:strand`
-- `crl_group_id`: CRL group ID
+- `locus_icrl_group_id`: Locus identifier and CRL group ID (format `chr:start:end:strand` and group ID)
 - `tpm`: TPM value
 - `alignment_score`: Alignment score
 
 **3. `{sample_name}.interactions.txt`** - Tabular file with detected interactions (if `--summarize` used). This file is always uncompressed for compatibility with downstream analysis tools.
 
-Header columns (26 total):
+Header columns (29 total, tab-separated):
+- `read_id`: Read identifier
 - `supporting_read_count`: Number of reads supporting this interaction
 - `locus_1_chromosome`, `locus_1_start`, `locus_1_end`, `locus_1_strand`: Genomic coordinates for locus 1
 - `locus_2_chromosome`, `locus_2_start`, `locus_2_end`, `locus_2_strand`: Genomic coordinates for locus 2
@@ -886,15 +882,14 @@ Header columns (26 total):
 - `hybridization_mfe_kcal_mol`: Minimum free energy of hybridization in kcal/mol (or `NA`)
 - `hybridized_sequence_segments`: Hybridized sequence segments (format: `seq1\tseq2`, or `NA\tNA`)
 - `hybridization_start_positions`: Start positions of hybridization within sequences (format: `pos1&pos2`, or `NA`)
-- `hybridization_genomic_coordinates`: Genomic coordinates of hybridization region (tab-delimited format: `refid1:ref_start1-ref_end1:ref_strand1&refid2:ref_start2-ref_end2:ref_strand2`, or `NA`)
-- `tpm_locus_1`, `tpm_locus_2`: TPM values for each locus
-- `tpm_combined`: Combined TPM (tpm1 + tpm2)
-- `alignment_score_locus_1`, `alignment_score_locus_2`: Alignment scores for each locus
-- `combined_alignment_score`: Combined score (score1 × score2)
+- `hybridization_genomic_coordinates`: Genomic coordinates of hybridization region (format: `refid1:ref_start1-ref_end1:ref_strand1&refid2:ref_start2-ref_end2:ref_strand2`, or `NA`)
+- `tpm_locus_1`, `tpm_locus_2`, `tpm_combined`: TPM values per locus and combined
+- `alignment_score_locus_1`, `alignment_score_locus_2`, `combined_alignment_score`: Alignment scores per locus and combined (score1 × score2)
 - `annotation_region_locus_1`, `annotation_region_locus_2`: Annotation regions (semicolon-separated if multiple; use to identify miRNA vs target)
-- `reference_transcript_id_1`, `reference_transcript_id_2`: Reference sequence IDs (semicolon-separated if multiple)
+- `reference_transcript_id_1`, `reference_transcript_id_2`: Reference transcript IDs (semicolon-separated if multiple)
+- `gene_name_1`, `gene_name_2`: Gene symbols for locus 1 and locus 2 (semicolon-separated if multiple)
 
-**Note:** The interactions file includes comment lines explaining how to identify miRNA vs target loci. Check the `annotation_region_locus_1` and `annotation_region_locus_2` fields - miRNA annotations typically include: `miRNA`, `3p_mature_mir`, `5p_mature_mir`, `mature_mir`.
+**Note:** The interactions file may include comment lines explaining how to identify miRNA vs target loci. miRNA annotations typically include: `miRNA`, `3p_mature_mir`, `5p_mature_mir`, `mature_mir`.
 
 **Usage Example:**
 ```bash
@@ -911,7 +906,7 @@ chira_extract.py -l loci.txt -o output_dir -f1 ref1.fasta -n sample1 \
 
 ## Utility Scripts
 
-The following utility scripts are provided to help prepare reference files and annotations for ChiRA analysis:
+The following utility scripts are provided to help prepare reference files and annotations for ChiRA analysis. The script `process_chunk_batchtools.py` is invoked internally by the batchtools R workflow for `chira_map.py` (when using `--use_batchtools`); it is not intended to be run directly by users.
 
 
 ### download_ensembl.py
@@ -924,16 +919,16 @@ The following utility scripts are provided to help prepare reference files and a
 - Supports HTTP and FTP with automatic fallback
 - Automatically decompresses gzipped files
 
-**Required Inputs:**
-- `-s, --species`: Species name (e.g., homo_sapiens, mus_musculus, bos_taurus)
-- `-g, --genome-version`: Ensembl release version for genome/cDNA/ncRNA (e.g., 110)
+**Required Arguments:**
+- `-s, --species`: Species (e.g., homo_sapiens, mus_musculus, bos_taurus)
+- `-g, --genome-version`: Ensembl release version for genome (e.g., 110)
 - `-t, --gtf-version`: Ensembl release version for GTF annotation (e.g., 110)
 - `-o, --output-dir`: Output directory for downloaded files
 
-**Optional Parameters:**
-- `-a, --assembly`: Genome assembly name (e.g., GRCh38, GRCm39). Auto-detected if not specified.
-- `--keep-compressed`: Keep compressed files after decompression
-- `--no-decompress`: Do not decompress gzipped files
+**Optional Arguments:**
+- `-a, --assembly`: Genome assembly (e.g., GRCh38). Auto-detect if not set.
+- `--keep-compressed`: Keep compressed files after decompression (default: remove)
+- `--no-decompress`: Do not decompress gzipped files (default: decompress)
 - `--timeout`: Download timeout in seconds (default: 60)
 
 **Usage Example:**
@@ -953,13 +948,13 @@ download_ensembl.py -s homo_sapiens -g 110 -t 110 -o ./ensembl_files
 - Handles gzipped files automatically
 - **Automatically converts U (uracil) to T (thymine)** in sequences for ChiRA compatibility (ChiRA expects DNA sequences)
 
-**Required Inputs:**
+**Required Arguments:**
 - `-s, --species`: Species code (e.g., hsa=human, mmu=mouse, bta=bovine, rno=rat)
-- `-o, --output`: Output FASTA file path
+- `-o, --output`: Output FASTA file for species-specific mature miRNAs
 
-**Optional Parameters:**
+**Optional Arguments:**
 - `--mirbase-version`: miRBase version (e.g., "22.1"). Default: CURRENT
-- `--keep-full`: Keep the full downloaded file after extraction
+- `--keep-full`: Keep full mature.fa after extraction (default: remove)
 - `--timeout`: Download timeout in seconds (default: 30)
 
 **Usage Example:**
@@ -971,7 +966,7 @@ download_mirbase_mature.py -s hsa -o mature_mirna_hsa.fasta
 
 ### download_mirbase_gff3.py
 
-**Description:** Downloads species-specific GFF3 files from miRBase containing chromosomal coordinates of microRNAs. Supports coordinate liftover between genome assemblies and chromosome name mapping.
+**Description:** Downloads species-specific GFF3 file from miRBase containing chromosomal coordinates of microRNAs. Supports coordinate liftover between genome assemblies and chromosome name mapping.
 
 **Key Features:**
 - Downloads current or version-specific GFF3 files
@@ -981,24 +976,17 @@ download_mirbase_mature.py -s hsa -o mature_mirna_hsa.fasta
 - Processing order: Download → Liftover → Rename chromosomes
 - Can be used directly with ChiRA (no GTF conversion needed)
 
-**Required Inputs:**
+**Required Arguments:**
 - `-s, --species`: Species code (e.g., hsa=human, mmu=mouse, bta=bovine, rno=rat)
-- `-o, --output`: Output GFF3 file path
+- `-o, --output`: Output GFF3 file for species-specific microRNA annotations
 
-**Optional Parameters:**
-- `--mirbase-version`: miRBase version number (e.g., "21"). Default: CURRENT version
+**Optional Arguments:**
+- `--mirbase-version`: miRBase version (e.g., "21"). Default: CURRENT
 - `--timeout`: Download timeout in seconds (default: 60)
-- `--source-genome`: Source genome assembly name for coordinate liftover (e.g., hg19, hg38, mm9, mm10)
-  - Required if `--chain-file` is provided
-- `--target-genome`: Target genome assembly name for coordinate liftover (e.g., hg19, hg38, mm9, mm10)
-  - Required if `--chain-file` is provided
-- `--chain-file`: Path to chain file for coordinate liftover
-  - Chain files can be downloaded from UCSC Genome Browser (e.g., https://hgdownload.soe.ucsc.edu/downloads.html)
-  - Requires `pyliftover` package (install with: `pip install pyliftover`)
-  - If provided, `--source-genome` and `--target-genome` must also be provided
-- `-m, --chromosome-mapping`: Tab-separated file with two columns: `gff3_chromosome_name<tab>target_chromosome_name`
-  - Chromosome names in the GFF3 file will be converted to target names in the output
-  - Applied after coordinate liftover (if performed)
+- `-m, --chromosome-mapping`: Tab-separated file: `gff3_chromosome_name<tab>target_chromosome_name`. Applied after liftover (if performed).
+- `--source-genome`: Source genome assembly for liftover (e.g., hg19, mm9). Required if `--chain-file` is given.
+- `--target-genome`: Target genome assembly for liftover (e.g., hg38, mm10). Required if `--chain-file` is given.
+- `--chain-file`: Path to chain file for coordinate liftover (e.g. from UCSC). Requires `--source-genome` and `--target-genome`. Needs `pyliftover` (`pip install pyliftover`).
 
 **Usage Examples:**
 ```bash
@@ -1032,21 +1020,19 @@ download_mirbase_gff3.py -s hsa -o hsa_processed.gff3 \
 
 ### remove_mirna_hairpin_from_gtf.py
 
-**Description:** Removes microRNA entries from an Ensembl GTF file. Used for preparing target-only transcriptome annotations.
+**Description:** Removes all microRNA entries from an Ensembl GTF file. Used for preparing target-only transcriptome annotations.
 
 **Key Features:**
 - Identifies miRNA entries by feature type, biotype, and optional regex pattern
 - Flexible pattern matching for custom miRNA identification
 - Preserves comment lines (optional removal)
 
-**Required Inputs:**
+**Required Arguments:**
 - `-i, --input`: Input GTF file
 - `-o, --output`: Output GTF file (without microRNA entries)
 
-**Optional Parameters:**
-- `-p, --pattern`: Regular expression pattern for matching miRNA in GTF attributes
-  - If not provided, only feature type and biotype fields are checked
-  - Example: `'gene_name\s+"[^"]*(?:[Mm][Ii][Rr][_-]|[^"]*[-_][Mm][Ii][Rr][_-])'`
+**Optional Arguments:**
+- `-p, --pattern`: Regex for matching miRNA in GTF attributes. If not set, only feature type and biotype are used. Example: `'gene_name\s+"[^"]*(?:[Mm][Ii][Rr][_-]|[^"]*[-_][Mm][Ii][Rr][_-])'`
 - `--remove-comments`: Remove comment lines from output (default: keep comments)
 
 **Usage Example:**
@@ -1068,14 +1054,12 @@ This script uses gffread (from [GFF utilities](https://ccb.jhu.edu/software/stri
 - Produces transcriptome FASTA without miRNA sequences (if GTF was filtered)
 - Automatically validates that gffread is available
 
-**Required Inputs:**
-- `-g, --gtf`: Filtered GTF file (e.g., output from `remove_mirna_hairpin_from_gtf.py`)
-- `-f, --genome-fasta`: Genome FASTA file (e.g., primary assembly from Ensembl)
+**Required Arguments:**
+- `-g, --gtf`: Filtered GTF file (e.g., from `remove_mirna_hairpin_from_gtf.py`)
+- `-f, --genome-fasta`: Genome FASTA (e.g., primary assembly from Ensembl)
 - `-o, --output`: Output transcript FASTA file
 
-**Dependencies:**
-- Requires `gffread` (available via conda: `conda install -c bioconda gffread`)
-- gffread is part of the GFF utilities package from Johns Hopkins University
+**Dependencies:** Requires `gffread` (e.g. `conda install -c bioconda gffread`). gffread is part of the GFF utilities package from Johns Hopkins University.
 
 **Usage Example:**
 ```bash
@@ -1097,16 +1081,15 @@ extract_transcripts_from_genome.py -g target_transcriptome.gtf \
 - Combines miRNA GFF3 and target GTF files for split-reference analysis
 - Removes comment lines from miRNA GTF
 - Optionally removes comment lines from target GTF
-- Note: miRBase provides GFF3 format, which ChiRA can handle directly. This script accepts GTF format.
+- miRBase GFF3 format can be used directly with ChiRA; this script accepts GTF or GFF3.
 
-**Required Inputs:**
-- `-m, --mirna-gtf`: Mature miRNA GTF/GFF3 file (e.g., from miRBase via `download_mirbase_gff3.py`)
-  - Note: miRBase GFF3 format can be used directly with ChiRA. This script accepts GTF format.
-- `-t, --target-gtf`: Target transcriptome GTF file (output from `remove_mirna_hairpin_from_gtf.py`)
+**Required Arguments:**
+- `-m, --mirna-gtf`: Mature miRNA GTF/GFF3 (e.g. from `download_mirbase_gff3.py`). GFF3 works with ChiRA.
+- `-t, --target-gtf`: Target transcriptome GTF (e.g. from `remove_mirna_hairpin_from_gtf.py`)
 - `-o, --output`: Output combined GTF file
 
-**Optional Parameters:**
-- `--remove-target-comments`: Remove comment lines from target GTF as well
+**Optional Arguments:**
+- `--remove-target-comments`: Remove comment lines from target GTF (default: keep)
 
 **Usage Example:**
 ```bash

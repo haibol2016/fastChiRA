@@ -14,6 +14,11 @@ import sys
 import subprocess
 import os
 
+# Real-time output when stdout is not a TTY (e.g. batch jobs)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
 
 def check_gffread():
     """
@@ -108,17 +113,17 @@ def extract_transcripts_with_gffread(gtf_file, genome_fasta, output_fasta):
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required GTF, genome, output; version."""
     parser = argparse.ArgumentParser(
         description='Extract transcript FASTA sequences from a genome FASTA file using gffread',
         usage='%(prog)s [-h] [-v,--version]',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
     parser.add_argument('-g', '--gtf', action='store', dest='gtf_file', required=True,
-                        metavar='', help='Filtered GTF file (e.g., output from remove_mirna_hairpin_from_gtf.py)')
+                        metavar='', help='Filtered GTF (e.g. from remove_mirna_hairpin_from_gtf.py)')
     parser.add_argument('-f', '--genome-fasta', action='store', dest='genome_fasta', required=True,
-                        metavar='', help='Genome FASTA file (e.g., primary assembly from Ensembl)')
+                        metavar='', help='Genome FASTA (e.g. primary assembly from Ensembl)')
     parser.add_argument('-o', '--output', action='store', dest='output_fasta', required=True,
                         metavar='', help='Output transcript FASTA file')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s 1.0')

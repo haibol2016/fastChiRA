@@ -1774,10 +1774,8 @@ may use additional threads based on available resources.''')
 
     parser.add_argument('--sort_memory', action='store', type=str, default=None, metavar='',
                         dest='sort_memory',
-                        help='Memory per thread for BAM sorting (e.g., "2G", "3G"). '
-                             'If not specified, automatically calculates based on available RAM. '
-                             'More memory reduces temporary files and I/O, improving performance. '
-                             'Total memory used = sort_memory × processes, so ensure sufficient RAM.')
+                        help="""Memory per thread for BAM sorting (e.g., "2G", "3G").
+If not specified, auto-calculated from available RAM. Total memory = sort_memory × processes.""")
 
     parser.add_argument("-s", '--stranded', type=str, choices=["fw", "rc", "both"], default='fw', metavar='',
                         dest='stranded',

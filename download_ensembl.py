@@ -16,6 +16,11 @@ from ftplib import FTP
 from urllib.parse import urljoin
 import time
 
+# Real-time output when stdout is not a TTY (e.g. batch jobs)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
 
 def download_file_http(url, local_path, timeout=60):
     """Download a file from HTTP/HTTPS URL with progress indication."""
@@ -276,23 +281,23 @@ def download_ensembl_files(species, genome_version, gtf_version, output_dir,
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required species/version/output, optional assembly/flags, version."""
     parser = argparse.ArgumentParser(
-        description='Download GTF, and genome FASTA files from Ensembl',
+        description='Download GTF and genome FASTA files from Ensembl',
         usage='%(prog)s [-h] [-v,--version]',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
     parser.add_argument('-s', '--species', action='store', dest='species', required=True,
-                        metavar='', help='Species name (e.g., homo_sapiens, mus_musculus, bos_taurus)')
+                        metavar='', help='Species (e.g., homo_sapiens, mus_musculus, bos_taurus)')
     parser.add_argument('-g', '--genome-version', action='store', dest='genome_version', required=True,
-                        metavar='', help='Ensembl release version for genome/cDNA/ncRNA (e.g., 110)')
+                        metavar='', help='Ensembl release versionfor genome (e.g., 110)')
     parser.add_argument('-t', '--gtf-version', action='store', dest='gtf_version', required=True,
-                        metavar='', help='Ensembl release version for GTF annotation (e.g., 110)')
-    parser.add_argument('-a', '--assembly', action='store', dest='assembly', default=None,
-                        metavar='', help='Genome assembly name (e.g., GRCh38, GRCm39). If not specified, will try to auto-detect.')
+                        metavar='', help='Ensembl release version for GTF (e.g., 110)')
     parser.add_argument('-o', '--output-dir', action='store', dest='output_dir', required=True,
                         metavar='', help='Output directory for downloaded files')
+    parser.add_argument('-a', '--assembly', action='store', dest='assembly', default=None,
+                        metavar='', help='Genome assembly (e.g., GRCh38). Auto-detect if not set.')
     parser.add_argument('--keep-compressed', action='store_true', dest='keep_compressed',
                         help='Keep compressed files after decompression (default: remove)')
     parser.add_argument('--no-decompress', action='store_true', dest='no_decompress',

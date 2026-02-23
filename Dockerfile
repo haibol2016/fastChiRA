@@ -66,6 +66,8 @@ ENV PATH=/usr/local/bin:/opt/conda/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:
 ENV PYTHONPATH=/app
 ENV HOME=/home/chira
 ENV TMPDIR=/tmp
+# Unbuffered Python stdout/stderr so logs appear in real time (e.g. docker logs, batch jobs)
+ENV PYTHONUNBUFFERED=1
 
 # Copy the ChiRA codebase and set permissions
 # Include Python scripts, R scripts, and template files for batchtools support

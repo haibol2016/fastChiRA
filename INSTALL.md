@@ -91,7 +91,7 @@ chira_map.py --version
 
 ## Installing for Batchtools Support
 
-If you plan to use batchtools for LSF cluster processing:
+If you plan to use batchtools for LSF cluster processing (e.g. `chira_map.py --use_batchtools` or `chira_extract.py --hybridize --use_batchtools`):
 
 ```bash
 # Activate your conda environment
@@ -109,6 +109,8 @@ conda install -c conda-forge r-base
 **Note**: `jsonlite` is required for JSON configuration file parsing. It's usually installed automatically as a dependency of `batchtools`, but explicitly installing it ensures compatibility.
 
 **Important**: All file paths are automatically converted to absolute paths for cluster job execution. No manual path conversion is needed.
+
+**Scripts**: `submit_chunks_batchtools.R` is used for mapping chunks; `submit_intarna_batchtools.R` is used for IntaRNA hybridization when both `--hybridize` and `--use_batchtools` are set in `chira_extract.py`.
 
 ## Troubleshooting
 
@@ -268,7 +270,7 @@ pip uninstall chira
 - **Python Version**: Requires Python >= 3.6 (Python 3.9+ recommended)
 - **Conda Channel**: Use `bioconda` channel for bioinformatics tools
 - **Editable Install**: Use `pip install -e .` during development to see code changes immediately
-- **Batchtools**: Required only if using `--use_batchtools` option in `chira_map.py`
+- **Batchtools**: Required only if using `--use_batchtools` in `chira_map.py` or `--hybridize --use_batchtools` in `chira_extract.py`
   - Requires R with `batchtools` and `jsonlite` packages
   - All file paths are automatically converted to absolute paths for cluster job execution
   - See `BATCHTOOLS_USAGE.md` for detailed usage instructions

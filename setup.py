@@ -6,7 +6,7 @@ import os
 
 # Read version from chira_utilities.py (single source of truth)
 # The version is defined as __version__ = "X.Y.Z" in chira_utilities.py
-version = "1.4.11"  # Default fallback version
+version = "1.4.13"  # Default fallback version
 try:
     # Import chira_utilities to get the version
     import chira_utilities
@@ -63,6 +63,7 @@ setup(
         "remove_mirna_hairpin_from_gtf.py",
         "process_chunk_batchtools.py",
         "submit_chunks_batchtools.R",
+        "submit_intarna_batchtools.R",
     ],
     install_requires=[
         # Core Python dependencies (required for basic functionality)
@@ -140,7 +141,7 @@ setup(
     #
     # CLUSTER COMPUTING (for parallel processing on HPC clusters):
     # - R with batchtools and jsonlite packages (R packages, not Python packages)
-    #   * Used in: chira_map.py --use_batchtools (for LSF/SLURM/SGE cluster job submission)
+    #   * Used in: chira_map.py --use_batchtools, chira_extract.py --use_batchtools (LSF/SLURM/SGE)
     #   * Enables distributing chunk processing across cluster nodes via batchtools
     #   * batchtools: Submitting chunk-based batch jobs to HPC cluster schedulers
     #   * jsonlite: Parsing JSON configuration files for batchtools job submission

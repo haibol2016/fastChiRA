@@ -1222,73 +1222,60 @@ def merge_loci(args):
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required I/O, optional GTF, overlap params, refs, blockbuster, processes, version."""
     parser = argparse.ArgumentParser(description='Chimeric Read Annotator: merge alignments and convert coordinates',
                                      usage='%(prog)s [-h] [-v,--version]',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('-bb', '--block_based', action='store_true', dest='block_based')
-
+    # Required I/O
     parser.add_argument('-b', '--bed', action='store', dest='bed', required=True,
-                        metavar='', help='Input BED file with alignments')
-
+                        metavar='', help='Input BED file with alignments (e.g. from chira_map)')
     parser.add_argument('-o', '--outdir', action='store', dest='outdir', required=True, metavar='',
-                        help='Output directory path for the whole analysis')
-
+                        help='Output directory for merged BED and segments')
     parser.add_argument('-g', '--gtf', action='store', dest='gtf', required=False,
-                        metavar='', help='Annotation GTF file')
+                        metavar='', help='Annotation GTF file for coordinate conversion')
 
+    # Overlap / merging parameters
     parser.add_argument('-ao', '--alignment_overlap', action='store', type=chira_utilities.score_float, default=0.7, metavar='',
                         dest='alignment_overlap_fraction',
-                        help='Minimum percentage overlap among BED entries inorder to merge. [0-1.0]')
-
+                        help='Minimum fraction overlap among BED entries to merge. [0-1.0]')
     parser.add_argument('-so', '--segment_overlap', action='store', type=chira_utilities.score_float, default=0.7, metavar='',
                         dest='segment_overlap_fraction',
                         help='Matching read positions with greater than this %% overlap are merged into a segment')
-
     parser.add_argument('-lt', '--length_threshold', action='store', type=chira_utilities.score_float, default=0.9, metavar='',
                         dest='length_threshold',
-                        help='Minimum length of the alignments to consider as a fraction of longest alignment. [0.8-1.0]')
-
-    parser.add_argument('-d', '--distance', action='store', type=int, default=30, metavar='',
-                        dest='distance',
-                        help='Blockbuster parameter distance')
-
-    parser.add_argument('-mc', '--min_cluster_height', action='store', type=int, default=10, metavar='',
-                        dest='min_cluster_height',
-                        help='Blockbuster parameter minClusterHeight')
-
-    parser.add_argument('-mb', '--min_block_height', action='store', type=int, default=10, metavar='',
-                        dest='min_block_height',
-                        help='Blockbuster parameter minBlockHeight')
-
-    parser.add_argument('-sc', '--scale', action='store', type=chira_utilities.score_float, default=0.1, metavar='',
-                        dest='scale',
-                        help='Blockbuster parameter scale')
-
+                        help='Minimum alignment length as fraction of longest. [0.8-1.0]')
     parser.add_argument('-co', '--chimeric_overlap', action='store', type=int, default=2, metavar='',
                         dest='chimeric_overlap',
-                        help='Maximum number of bases allowed between the chimeric segments of a read')
-
-    parser.add_argument('-f1', '--ref_fasta1', action='store', dest='ref_fasta1', required=False,
-                        metavar='', help='First priority fasta file')
-
-    parser.add_argument('-f2', '--ref_fasta2', action='store', dest='ref_fasta2', required=False,
-                        metavar='', help='second priority fasta file')
-
+                        help='Maximum bases allowed between chimeric segments of a read')
     parser.add_argument("-c", '--chimeric_only', action='store_true', dest='chimeric_only',
-                        help="Consider chimeric reads only for merging")
-
+                        help='Consider only chimeric reads for merging')
     parser.add_argument('-ls', '--min_locus_size', action='store', type=int, default=1, metavar='',
                         dest='min_locus_size',
-                        help='Minimum number of alignments required per mered locus')
+                        help='Minimum number of alignments per merged locus')
+
+    # Reference FASTA
+    parser.add_argument('-f1', '--ref_fasta1', action='store', dest='ref_fasta1', required=False,
+                        metavar='', help='First priority reference FASTA')
+    parser.add_argument('-f2', '--ref_fasta2', action='store', dest='ref_fasta2', required=False,
+                        metavar='', help='Second priority reference FASTA')
+
+    # Blockbuster (optional)
+    parser.add_argument('-bb', '--block_based', action='store_true', dest='block_based',
+                        help='Use blockbuster for block-based merging')
+    parser.add_argument('-d', '--distance', action='store', type=int, default=30, metavar='',
+                        dest='distance', help='Blockbuster parameter: distance')
+    parser.add_argument('-mc', '--min_cluster_height', action='store', type=int, default=10, metavar='',
+                        dest='min_cluster_height', help='Blockbuster parameter: minClusterHeight')
+    parser.add_argument('-mb', '--min_block_height', action='store', type=int, default=10, metavar='',
+                        dest='min_block_height', help='Blockbuster parameter: minBlockHeight')
+    parser.add_argument('-sc', '--scale', action='store', type=chira_utilities.score_float, default=0.1, metavar='',
+                        dest='scale', help='Blockbuster parameter: scale')
 
     parser.add_argument('-p', '--processes', action='store', type=int, default=None, metavar='',
                         dest='num_processes',
-                        help='''Number of parallel processes to use for transcript processing. 
-If not specified (None): Automatically determines optimal number based on CPU count and transcript count. 
-If specified: Uses the specified number of processes (will be limited by available CPUs and transcript count). 
-Set to 1 to disable parallel processing.''')
+                        help="""Number of parallel processes for transcript processing.
+None = auto from CPU and transcript count. Set to 1 to disable.""")
 
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {chira_utilities.__version__}')
 

@@ -348,10 +348,25 @@ nodename = "your-lsf-hostname"
 
 See `lsf_custom.tmpl` for the default template structure.
 
+## chira_extract.py Hybridization with Batchtools
+
+When using `--hybridize` and `--use_batchtools` in `chira_extract.py`, IntaRNA jobs are submitted via a separate R script:
+
+- **submit_intarna_batchtools.R**: Submits one IntaRNA job per chunk (or per locus pair with `--intarna_per_pair_only`). Reads `config.json` and `jobs.json` from `batchtools_work/`, creates a registry, and submits LSF jobs. Uses the same LSF template and resource options as chunk mapping (`--batchtools_*`). The script **waits for all jobs to complete** before returning (manual polling with `getJobTable` and status counting; no `waitForJobs` to avoid POSIXct compatibility issues in some batchtools versions).
+
+**Flow:** Phase 1 prepare (per-chunk FASTA and manifests) → Phase 2 R script (submit and wait) → Phase 3 write chimeras from `result.csv` per chunk.
+
+**Options:** Same batchtools options as `chira_map.py` (`--batchtools_queue`, `--batchtools_cores`, `--batchtools_memory`, `--batchtools_walltime`, `--batchtools_template`, `--batchtools_conda_env`, `--batchtools_max_parallel`, `--batchtools_registry`). Plus `--intarna_per_pair_only` to run IntaRNA once per pair instead of one multi-FASTA run per chunk.
+
+## R Scripts: Job Waiting and POSIXct Compatibility
+
+Both `submit_chunks_batchtools.R` and `submit_intarna_batchtools.R` use **manual polling** (repeat: `getJobTable` → count completed → `Sys.sleep(30)`) instead of `waitForJobs()`. This avoids errors in environments where batchtools returns `done`/`running`/`error` as POSIXct timestamps (e.g. `'sum' not defined for "POSIXt" objects`). Status counts use a small helper `count_status(x)` that works for both logical and POSIXct columns.
+
 ## Files Created
 
-- `process_chunk_batchtools.py`: Standalone script for processing one chunk (called by each batchtools job)
-- `submit_chunks_batchtools.R`: R script that submits jobs via batchtools
+- `process_chunk_batchtools.py`: Standalone script for processing one chunk (called by each batchtools job for mapping)
+- `submit_chunks_batchtools.R`: R script that submits mapping chunk jobs via batchtools
+- `submit_intarna_batchtools.R`: R script that submits IntaRNA jobs via batchtools (used by `chira_extract.py --hybridize --use_batchtools`)
 - `lsf_custom.tmpl`: Default LSF template file (included with ChiRA)
 - `output_dir/batchtools_registry_<timestamp>/`: Batchtools registry directory containing:
   - `config.json`: Job configuration with all absolute paths

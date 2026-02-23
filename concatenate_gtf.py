@@ -14,6 +14,11 @@ import argparse
 import sys
 import re
 
+# Real-time output when stdout is not a TTY (e.g. batch jobs)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
 
 def concatenate_gtf_files(mirna_gtf, target_gtf, output_gtf, keep_target_comments=True):
     """
@@ -73,21 +78,22 @@ def concatenate_gtf_files(mirna_gtf, target_gtf, output_gtf, keep_target_comment
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required I/O, optional flags, version."""
     parser = argparse.ArgumentParser(
         description='Concatenate mature miRNA GTF/GFF3 file with target transcriptome GTF file',
         usage='%(prog)s [-h] [-v,--version]',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
+    # Required I/O (order: miRNA GTF, target GTF, output)
     parser.add_argument('-m', '--mirna-gtf', action='store', dest='mirna_gtf', required=True,
-                        metavar='', help='Mature miRNA GTF/GFF3 file (e.g., from miRBase via download_mirbase_gff3.py). Note: miRBase GFF3 format can be used directly with ChiRA.')
+                        metavar='', help='Mature miRNA GTF/GFF3 (e.g. from download_mirbase_gff3.py). GFF3 works with ChiRA.')
     parser.add_argument('-t', '--target-gtf', action='store', dest='target_gtf', required=True,
-                        metavar='', help='Target transcriptome GTF file (output from remove_mirna_hairpin_from_gtf.py)')
+                        metavar='', help='Target transcriptome GTF (e.g. from remove_mirna_hairpin_from_gtf.py)')
     parser.add_argument('-o', '--output', action='store', dest='output_gtf', required=True,
                         metavar='', help='Output combined GTF file')
     parser.add_argument('--remove-target-comments', action='store_true', dest='remove_target_comments',
-                        help='Remove comment lines from target GTF as well (default: keep target comments)')
+                        help='Remove comment lines from target GTF (default: keep)')
     parser.add_argument('-v', '--version', action='version', version='%(prog)s 1.0')
     
     return parser.parse_args()

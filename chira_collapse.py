@@ -76,17 +76,18 @@ def collapse_fastq_to_fasta(fastq_file, fasta_file, umi_len):
 
 
 def parse_arguments():
-    """Parse command-line arguments."""
+    """Parse command-line arguments. Order: required I/O, optional UMI, version."""
     parser = argparse.ArgumentParser(description='Chimeric Read Annotator: collapse FASTQ reads to FASTA format',
                                      usage='%(prog)s [-h] [-v,--version]',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
+    # Required I/O
     parser.add_argument('-i', '--fastq', action='store', dest='fastq', required=True, metavar='',
-                        help='Input fastq file, gzipped or not')
+                        help='Input FASTQ file (gzipped or not)')
     parser.add_argument('-o', '--fasta', action='store', dest='fasta', required=True, metavar='',
-                        help='Output fasta file')
-    parser.add_argument("-u", '--umi_len', action='store', type=int, default=0, help="Length of the UMI, if present."
-                        "It is trimmed from the 5' end of each read and appended to the tag id")
+                        help='Output FASTA file')
+    parser.add_argument("-u", '--umi_len', action='store', type=int, default=0, metavar='',
+                        help="""Length of the UMI if present. Trimmed from the 5' end of each read and appended to the tag id.""")
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {chira_utilities.__version__}')
 
     return parser.parse_args()

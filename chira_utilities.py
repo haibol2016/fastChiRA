@@ -8,11 +8,42 @@ This module contains shared utility functions and constants used across ChiRA sc
 import argparse
 import re
 import subprocess
+import sys
 from Bio import SeqIO
 from datetime import datetime
 
 # Version number - single source of truth for all ChiRA scripts
-__version__ = "1.4.11"
+__version__ = "1.4.13"
+
+
+def _enable_unbuffered_stdout_stderr():
+    """Force stdout/stderr line-buffered so log output appears in real time (e.g. in batch jobs)."""
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    else:
+        # Python 3.6: wrap so every write flushes
+        class _FlushWrapper:
+            __slots__ = ('_stream',)
+
+            def __init__(self, stream):
+                self._stream = stream
+
+            def write(self, s):
+                self._stream.write(s)
+                self._stream.flush()
+
+            def flush(self):
+                self._stream.flush()
+
+            def __getattr__(self, name):
+                return getattr(self._stream, name)
+
+        sys.stdout = _FlushWrapper(sys.stdout)
+        sys.stderr = _FlushWrapper(sys.stderr)
+
+
+_enable_unbuffered_stdout_stderr()
 
 # Try to import psutil for adaptive buffer sizing (optional dependency)
 try:

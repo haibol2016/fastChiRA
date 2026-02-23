@@ -9,9 +9,9 @@ The following Python packages need to be installed via pip or conda:
 ### Core Dependencies
 
 1. **Biopython** (`Bio`)
-   - Used in: `chira_extract.py`, `chira_utilities.py`, `remove_mirna_hairpin_from_fasta.py`
+   - Used in: `chira_extract.py`, `chira_utilities.py`
    - Import: `from Bio import SeqIO`
-   - Purpose: Reading FASTA files (used in `extract_reflengths()` and for parsing FASTA sequences in `chira_extract.py` and `remove_mirna_hairpin_from_fasta.py`)
+   - Purpose: Reading FASTA files (used in `extract_reflengths()` and for parsing FASTA sequences in `chira_extract.py`)
    - Note: `chira_collapse.py` no longer uses Biopython - uses raw file parsing for better performance
 
 2. **bcbiogff** (`BCBio`)
@@ -66,8 +66,8 @@ The following R packages are required for HPC cluster job submission via batchto
 ### Core R Dependencies (for batchtools)
 
 1. **batchtools**
-   - Used in: `chira_map.py` (optional, for HPC cluster job submission)
-   - R script: `submit_chunks_batchtools.R`
+   - Used in: `chira_map.py` (optional, for HPC cluster job submission), `chira_extract.py` (optional, for IntaRNA when `--hybridize --use_batchtools`)
+   - R scripts: `submit_chunks_batchtools.R`, `submit_intarna_batchtools.R`
    - Purpose: Submitting chunk-based batch jobs to HPC cluster schedulers (LSF, SLURM, SGE, etc.)
    - Installation:
      ```r
@@ -77,12 +77,13 @@ The following R packages are required for HPC cluster job submission via batchto
      ```bash
      conda install -c conda-forge r-batchtools
      ```
-   - Note: Only required when using `--use_batchtools` option in `chira_map.py`
+   - Note: Required when using `--use_batchtools` in `chira_map.py` or `--hybridize --use_batchtools` in `chira_extract.py`
    - Benefits: Enables distributing chunk processing across multiple cluster nodes for true parallel computing
+   - Compatibility: Both R scripts use manual polling and `count_status()` for job status (handles batchtools returning POSIXct for done/running/error in some versions)
 
 2. **jsonlite**
-   - Used in: `chira_map.py` (optional, for batchtools JSON configuration parsing)
-   - R script: `submit_chunks_batchtools.R`
+   - Used in: `chira_map.py` and `chira_extract.py` (optional, for batchtools JSON configuration parsing)
+   - R scripts: `submit_chunks_batchtools.R`, `submit_intarna_batchtools.R`
    - Purpose: Parsing JSON configuration files for batchtools job submission
    - Installation:
      ```r
@@ -240,7 +241,7 @@ ChiRA scripts support parallel processing to improve performance on multi-core s
 
 1. **chira_quantify.py**
    - Uses MPIRE `WorkerPool` for parallelizing the EM algorithm
-   - Command-line option: `-t, --threads` (default: 1, use 0 for all available cores)
+   - Command-line option: `-p, --processes` (default: 1, use 0 for all available cores)
    - Parallelizes: E-step (multimapped reads) and aggregation step
    - Benefit: 2-8x faster for large datasets with many multimapping reads (bypasses Python GIL for true parallelism)
    - Benefits of MPIRE: 50-90% memory reduction, 2-3x faster startup, shared objects for large dictionaries
@@ -308,10 +309,11 @@ ChiRA scripts support parallel processing to improve performance on multi-core s
 - **download_mirbase_gff3.py**: Requires `pyliftover` (optional, only for coordinate liftover)
 - **download_mirbase_mature.py**: No external dependencies (uses standard library only)
 - **remove_mirna_hairpin_from_gtf.py**: No external dependencies (uses standard library only)
-- **remove_mirna_hairpin_from_fasta.py**: Requires `biopython`
 - **concatenate_gtf.py**: No external dependencies (uses standard library only)
-- **process_chunk_batchtools.py**: No external dependencies (uses standard library only, called by batchtools jobs)
-- **submit_chunks_batchtools.R**: Requires R with `batchtools` and `jsonlite` packages (used by `chira_map.py` for HPC cluster submission)
+- **extract_transcripts_from_genome.py**: Requires `gffread` (conda: `conda install -c bioconda gffread`)
+- **process_chunk_batchtools.py**: Imports `chira_map` and `chira_utilities`; called by batchtools jobs for mapping chunks
+- **submit_chunks_batchtools.R**: Requires R with `batchtools` and `jsonlite` (used by `chira_map.py` for HPC cluster submission)
+- **submit_intarna_batchtools.R**: Requires R with `batchtools` and `jsonlite` (used by `chira_extract.py` for IntaRNA when `--hybridize --use_batchtools`)
 
 ## Notes
 
