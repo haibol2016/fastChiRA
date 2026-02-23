@@ -1076,7 +1076,7 @@ def run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, inta
     conda_env = getattr(args, 'batchtools_conda_env', None) or os.environ.get('CONDA_DEFAULT_ENV', '')
     if conda_env:
         conda_env = os.path.expanduser(conda_env)
-    max_parallel = getattr(args, 'batchtools_max_parallel', None) or len(jobs_data)
+    max_parallel = getattr(args, 'batchtools_max_parallel', None)  # None -> submit all jobs at once
     job_name_prefix = f"chira_intarna_{os.path.basename(args.outdir)}_{int(time.time())}"
 
     # Resolve template (same as chira_map.py)
@@ -1106,8 +1106,9 @@ def run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, inta
         "conda_env": conda_env,
         "intarna_params": intarna_params,
         "job_name_prefix": job_name_prefix,
-        "max_parallel": max_parallel,
+        "max_parallel": max_parallel,  # None = all at once (min walltime); int = limit concurrent jobs
         "template_file": template_file,
+        "poll_sleep_seconds": getattr(args, 'batchtools_poll_interval', None),  # None = use R default (120)
     }
 
     config_file = os.path.abspath(os.path.join(batchtools_work_dir, "config.json"))
@@ -1414,18 +1415,14 @@ def merge_files(inprefix, outfile, header, r, compress=False):
         
         # Use shell commands to merge and sort files (more efficient for large files)
         # Intermediate files are uncompressed, so we can use cat directly
-        # OPTIMIZATION: Use parallel sort if available (GNU sort supports --parallel option)
-        # For systems with GNU sort >= 8.6, this can significantly speed up sorting large files
+        # OPTIMIZATION: Use parallel sort if available (GNU sort >= 8.6); use more threads to shorten merge walltime
         sort_cmd = "sort -u"
         try:
-            # Check if GNU sort with --parallel is available (GNU sort >= 8.6)
             result = subprocess.run(["sort", "--version"], capture_output=True, text=True, timeout=2)
             if "GNU coreutils" in result.stdout:
-                # Use parallel sort - use number of processes that created the files
-                # This ensures we use appropriate parallelism for merging
-                sort_cmd = f"sort --parallel={r} -u"
+                n_sort = max(1, min(r * 2, (os.cpu_count() or 16)))  # more threads when available to speed merge
+                sort_cmd = f"sort --parallel={n_sort} -u"
         except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-            # Fall back to standard sort if check fails
             pass
         
         escaped_files = " ".join([f"'{f}'" for f in temp_files])
@@ -2002,9 +1999,12 @@ the final output. [0, 1) - values >= 1.0 will be clamped to just below 1.0.""")
                         help='Walltime per job (e.g. 48:00 or 240:00)')
     parser.add_argument('--batchtools_conda_env', action='store', dest='batchtools_conda_env', default=None, metavar='',
                         help='Conda environment path for cluster jobs (optional)')
-    parser.add_argument('--batchtools_max_parallel', action='store', type=int, default=8, metavar='',
+    parser.add_argument('--batchtools_max_parallel', action='store', type=int, default=None, metavar='',
                         dest='batchtools_max_parallel',
-                        help='Max concurrent batchtools jobs (default: all chunks at once)')
+                        help='Max concurrent batchtools jobs (default: None = all chunks at once for minimum walltime)')
+    parser.add_argument('--batchtools_poll_interval', action='store', type=int, default=None, metavar='',
+                        dest='batchtools_poll_interval',
+                        help='Seconds between job status polls (default: 120). Lower = notice completion sooner, more scheduler load.')
 
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {chira_utilities.__version__}')
 

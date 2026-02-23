@@ -198,6 +198,9 @@ If you prefer to install dependencies manually:
   - Purpose: Parsing JSON configuration files for batchtools job submission
   - Install with: `conda install -c conda-forge r-jsonlite` or `install.packages("jsonlite")` in R
   - Note: Usually installed automatically as a dependency of `batchtools`, but explicitly installing ensures compatibility
+- **future** and **future.apply** (required for IntaRNA batchtools; parallel runs within each chunk job)
+  - Install in the **same conda environment as IntaRNA** (the one used via `--batchtools_conda_env`) so cluster workers have them when running the job.
+  - Install with: `conda install -c conda-forge r-future r-future.apply` in that env, or `install.packages(c("future", "future.apply"))` in R.
 - See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md) for detailed usage instructions
 
 **Command-line tools:**
@@ -237,11 +240,9 @@ conda install -c bioconda clan  # Alternative aligner to BWA in chira_map.py
 # Linux: Usually pre-installed
 # macOS: brew install coreutils
 
-# R packages (for batchtools HPC cluster support, optional)
-conda install -c conda-forge r-batchtools r-jsonlite
-# Or in R:
-# R
-# > install.packages(c("batchtools", "jsonlite"))
+# R packages (for batchtools HPC cluster support; add r-future r-future.apply for IntaRNA hybridization)
+conda install -c conda-forge r-batchtools r-jsonlite r-future r-future.apply
+# Or in R: install.packages(c("batchtools", "jsonlite", "future", "future.apply"))
 ```
 
 For a complete list of dependencies, see [DEPENDENCIES.md](DEPENDENCIES.md).
@@ -794,26 +795,29 @@ chira_quantify.py -b segments.bed -m merged.bed -o output_dir -cs 0.7 -ls 10 -p 
 - `--batchtools_registry`: Registry directory (default: `<outdir>/batchtools_work/registry`).
 - `--batchtools_template`: LSF template path or `"lsf-simple"` (default: lsf_custom.tmpl if present).
 - `--batchtools_queue`: LSF queue (default: long).
-- `--batchtools_cores`: Cores per job and IntaRNA --threads (default: 8).
+- `--batchtools_cores`: Cores per LSF job (default: 8). Within each job that many IntaRNA pairs run in parallel (faster chunks).
 - `--batchtools_memory`: Total memory per job (e.g. 8GB, 64GB). Converted to per-core for LSF.
 - `--batchtools_walltime`: Walltime per job (default: 48:00).
 - `--batchtools_conda_env`: Conda environment for cluster jobs (optional).
-- `--batchtools_max_parallel`: Max concurrent batchtools jobs (default: all chunks at once).
+- `--batchtools_max_parallel`: Max concurrent batchtools jobs (default: None = all chunks at once for minimum walltime).
+- `--batchtools_poll_interval`: Seconds between job-status polls (default: 120). Lower (e.g. 60) notices completion sooner; higher reduces scheduler load.
 
-**Command-line settings to finish sooner:**
+**Command-line settings to finish sooner / shorten walltime:**
 
-- **Skip steps you don't need:** Omit `-r` / `--hybridize` (and `--use_batchtools`) to skip IntaRNA and finish after extraction and merge. Omit `-s` / `--summarize` if you don't need the interactions file.
-- **More parallelism:** Use a higher `-p` (e.g. `-p 8` or `-p 16`) for chimera extraction and for the number of IntaRNA chunk jobs when using `-r --use_batchtools`. Set `--batchtools_max_parallel` to at least the number of chunks (or leave default so all chunk jobs run at once). Request one core per IntaRNA job with `--batchtools_cores 1` so the cluster can run more jobs in parallel.
-- **Less work (filter earlier):** Raise `-tc` (e.g. `-tc 0.2` or `-tc 0.5`) to drop low-TPM alignments and `-sc` (e.g. `-sc 0.1` or `-sc 0.2`) to drop low-score hybrids; fewer chimeras and less IntaRNA, at the cost of sensitivity.
-- **Faster IntaRNA per job:** Use `-acc N` (default) for no accessibility computation; keep `-m H` (default) for heuristic mode.
+- **Skip steps you don't need:** Omit `-r` / `--hybridize` to skip IntaRNA; omit `-s` / `--summarize` if you don't need the interactions file.
+- **Submit all IntaRNA jobs at once:** Leave `--batchtools_max_parallel` unset (default) so all chunk jobs are submitted together and run in parallel. Set it only to limit concurrent jobs (e.g. for queue policy).
+- **More chunks and parallelism:** Use higher `-p` (e.g. `-p 16` or `-p 32`) so you have more IntaRNA chunk jobs; with default max_parallel they all run concurrently. Use `--batchtools_cores 8` (or higher) so each chunk runs many IntaRNA pairs in parallel within the job; or `--batchtools_cores 1` to run more jobs at once (one core per job).
+- **Faster completion detection:** Use `--batchtools_poll_interval 60` so the script notices when jobs finish sooner (at the cost of more frequent status checks).
+- **Less work (filter earlier):** Raise `-tc` or `-sc` to drop low-TPM/low-score alignments; fewer chimeras and less IntaRNA.
+- **Faster IntaRNA:** Keep `-acc N` and `-m H` (defaults). Merge step uses extra sort threads when available to shorten merge time.
 
-**Example — finish as fast as possible with hybridization:**
+**Example — minimize walltime with hybridization:**
 ```bash
 chira_extract.py -l loci.counts -o out -n mysample -f1 ref.fa -g ref.gtf -f ref_genome.fa \
   -p 32 -tc 0.2 -sc 0.1 -r --use_batchtools \
-  --batchtools_max_parallel 32 --batchtools_cores 1
+  --batchtools_cores 1 --batchtools_poll_interval 60
 ```
-(Adjust `-p` and `--batchtools_max_parallel` to your cluster; use `-tc` / `-sc` only if you accept dropping some low-TPM/low-score chimeras.)
+(Default: all 32 chunk jobs submitted at once. Use `-tc` / `-sc` only if you accept dropping some low-TPM/low-score chimeras.)
 
 **Example — fastest run without IntaRNA:**
 ```bash

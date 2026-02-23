@@ -39,6 +39,8 @@ RUN apt-get update && \
         r-base \
         r-batchtools \
         r-jsonlite \
+        r-future \
+        r-future.apply \
         && \
     # Install MPIRE with version requirement (>=2.4.0 for shared_objects support)
     # Try conda-forge first, fallback to pip if version is too old

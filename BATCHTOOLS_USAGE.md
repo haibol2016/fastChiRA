@@ -18,17 +18,19 @@ ChiRA supports R batchtools as a backend for submitting chunk processing jobs to
    conda install -c conda-forge r-base
    ```
 
-2. **R packages** - `batchtools` and `jsonlite` (required for batchtools functionality):
+2. **R packages** - `batchtools`, `jsonlite`, and (for IntaRNA) `future` and `future.apply`:
    ```r
    install.packages(c("batchtools", "jsonlite"))
+   install.packages(c("future", "future.apply"))  # for submit_intarna_batchtools.R
    ```
    Or via conda:
    ```bash
-   conda install -c conda-forge r-batchtools r-jsonlite
+   conda install -c conda-forge r-batchtools r-jsonlite r-future r-future.apply
    ```
    - **batchtools**: Submitting chunk-based batch jobs to HPC cluster schedulers (LSF, SLURM, SGE, etc.)
    - **jsonlite**: Parsing JSON configuration files for batchtools job submission
-   - **Note**: `jsonlite` is usually installed automatically as a dependency of `batchtools`, but explicitly installing ensures compatibility
+   - **future** / **future.apply**: Used by `submit_intarna_batchtools.R` for parallel IntaRNA runs within each job. Install these in the **same conda environment as IntaRNA** (e.g. the env specified by `--batchtools_conda_env`) so cluster workers load them when running the job.
+   - **Note**: `jsonlite` is usually installed automatically as a dependency of `batchtools`; install `future` and `future.apply` in your IntaRNA conda env when using hybridization with batchtools.
 
 3. **LSF scheduler** available on your cluster
 
@@ -82,6 +84,7 @@ python chira_map.py \
   - Limits how many jobs run simultaneously
   - Example: `--batchtools_max_parallel 2` → only 2 jobs run at a time, others wait
   - Useful if cluster has job limits per user
+- `--batchtools_poll_interval`: Seconds between job-status polls (default: 120). Lower (e.g. 60) shortens time until completion is detected.
 - `--batchtools_conda_env`: Conda environment path (default: auto-detect from `CONDA_DEFAULT_ENV`)
 - `--batchtools_template`: LSF template file (default: `lsf_custom.tmpl` in ChiRA directory)
   - Can be an absolute path to a custom template file
@@ -89,6 +92,8 @@ python chira_map.py \
   - Relative paths are automatically resolved to absolute paths
   - Uses proven template based on InPAS implementation
   - Only change if you need custom LSF directives
+
+**Minimizing walltime (IntaRNA / chira_extract):** Leave `--batchtools_max_parallel` unset so all chunk jobs are submitted at once; use high `-p` and `--batchtools_cores` (or `--batchtools_cores 1` to maximize concurrent jobs). Optionally set `--batchtools_poll_interval 60` so completion is detected sooner.
 
 ### Example: Full Command with Parallel Processing
 
@@ -362,7 +367,7 @@ When using `--hybridize` and `--use_batchtools` in `chira_extract.py`, IntaRNA j
 
 ## R Scripts: Job Waiting and POSIXct Compatibility
 
-Both `submit_chunks_batchtools.R` and `submit_intarna_batchtools.R` use **manual polling** (repeat: `getJobTable` → count completed → `Sys.sleep(30)`) instead of `waitForJobs()`. This avoids errors in environments where batchtools returns `done`/`running`/`error` as POSIXct timestamps (e.g. `'sum' not defined for "POSIXt" objects`). Status counts use a small helper `count_status(x)` that works for both logical and POSIXct columns.
+Both `submit_chunks_batchtools.R` and `submit_intarna_batchtools.R` use **manual polling** (repeat: `getJobTable` → count completed → `Sys.sleep(POLL_SLEEP_SECONDS)`; IntaRNA script reads sleep from config `poll_sleep_seconds`, default 120) instead of `waitForJobs()`. This avoids errors in environments where batchtools returns `done`/`running`/`error` as POSIXct timestamps (e.g. `'sum' not defined for "POSIXt" objects`). Status counts use a small helper `count_status(x)` that works for both logical and POSIXct columns.
 
 ## Files Created
 
