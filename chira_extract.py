@@ -918,6 +918,7 @@ def _parse_intarna_csv_to_hybrids(csv_path, pairs_order=None):
     d_hybrids = {}
     if not os.path.exists(csv_path):
         sys.stderr.write(f"Warning: IntaRNA result file not found: {csv_path}\n")
+        sys.stderr.write("  Ensure batchtools LSF jobs completed successfully and the path is accessible from this host.\n")
         return d_hybrids
     with open(csv_path, 'r', encoding='utf-8', errors='replace') as f:
         # splitlines() handles \n, \r\n, \r so we get one list item per row
@@ -1815,8 +1816,9 @@ def run_hybridization(args):
 
     # Build IntaRNA parameters
     common_intarna_params = build_intarna_params(args)
-    batchtools_work_dir = os.path.join(args.outdir, "batchtools_work")
-    batchtools_registry = getattr(args, 'batchtools_registry', None) or os.path.join(batchtools_work_dir, "registry")
+    # Use absolute path so finish_hybridization_write looks in the same place the cluster jobs write (jobs.json uses absolute paths).
+    batchtools_work_dir = os.path.abspath(os.path.join(args.outdir, "batchtools_work"))
+    batchtools_registry = getattr(args, 'batchtools_registry', None) or os.path.abspath(os.path.join(batchtools_work_dir, "registry"))
     os.makedirs(batchtools_work_dir, exist_ok=True)
     run_batchtools_hybridization(args, common_intarna_params, batchtools_work_dir, batchtools_registry)
     if not getattr(args, 'keep_batchtools_work', False):
@@ -2012,6 +2014,10 @@ the final output. [0, 1) - values >= 1.0 will be clamped to just below 1.0.""")
 def main():
     """Main function to orchestrate the chimera extraction workflow."""
     args = parse_arguments()
+    # Use absolute paths so batchtools jobs (which write to absolute paths in jobs.json) and
+    # the finish phase find the same result.csv files, regardless of the directory chira_extract was run from.
+    args.outdir = os.path.abspath(args.outdir)
+    args.crl_file = os.path.abspath(args.crl_file)
     print_configuration(args)
     validate_arguments(args)
 

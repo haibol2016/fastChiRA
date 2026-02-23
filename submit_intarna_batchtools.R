@@ -91,32 +91,38 @@ if (template_file == "lsf-simple" || file.exists(template_file)) {
   stop(sprintf("Template file '%s' does not exist. Use --batchtools_template to specify a valid template.", template_file))
 }
 
-# Parse multi-FASTA into list of {id, seq} in order (same order as pairs.tsv)
-parse_fasta_blocks <- function(path) {
-  if (!file.exists(path)) return(list())
-  lines <- readLines(path, warn = FALSE)
-  starts <- which(grepl("^>", lines))
-  blocks <- list()
-  for (i in seq_along(starts)) {
-    start <- starts[i]
-    end <- if (i < length(starts)) starts[i + 1L] - 1L else length(lines)
-    id <- sub("^>\\s*", "", lines[start])
-    seq <- paste(lines[(start + 1L):end], collapse = "")
-    blocks[[i]] <- list(id = id, seq = seq)
-  }
-  blocks
-}
-
 # Run IntaRNA once per locus pair (only real chimeric pairs; no all-vs-all).
+# Creates result.csv with at least a header at job start so the file always exists (even if the job fails).
+# Helper and constants are defined inside so they are serialized with the job and available on batchtools workers.
 run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_env = NULL) {
+  # Must be inside this function so batchtools workers have it when the job runs on the cluster
+  parse_fasta_blocks <- function(path) {
+    if (!file.exists(path)) return(list())
+    lines <- readLines(path, warn = FALSE)
+    starts <- which(grepl("^>", lines))
+    blocks <- list()
+    for (i in seq_along(starts)) {
+      start <- starts[i]
+      end <- if (i < length(starts)) starts[i + 1L] - 1L else length(lines)
+      id <- sub("^>\\s*", "", lines[start])
+      seq <- paste(lines[(start + 1L):end], collapse = "")
+      blocks[[i]] <- list(id = id, seq = seq)
+    }
+    blocks
+  }
+  intarna_csv_header <- "id1;id2;start1;end1;start2;end2;hybridDPfull;E"
+
   chunk_dir <- dirname(query_fa)
   pairs_tsv <- file.path(chunk_dir, "pairs.tsv")
+
+  # Create result.csv immediately with header so the file exists even if we stop() later (e.g. pairs_tsv not found on compute node).
+  writeLines(intarna_csv_header, output_csv)
+
   if (!file.exists(pairs_tsv)) {
-    stop(sprintf("pairs.tsv not found: %s", pairs_tsv))
+    stop(sprintf("pairs.tsv not found: %s (check that batchtools work dir is on a shared filesystem visible from compute nodes)", pairs_tsv))
   }
   pairs <- read.table(pairs_tsv, sep = "\t", header = FALSE, stringsAsFactors = FALSE)
   if (nrow(pairs) == 0L) {
-    file.create(output_csv)
     return(invisible(NULL))
   }
 
@@ -142,9 +148,9 @@ run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_en
     stop(sprintf("Chunk %s: pair count mismatch (pairs=%d, query blocks=%d, target blocks=%d)",
                  n, nrow(pairs), length(query_blocks), length(target_blocks)))
   }
-  out_con <- file(output_csv, "w")
+  # Append data lines (header already written above)
+  out_con <- file(output_csv, "a")
   on.exit(close(out_con), add = TRUE)
-  header_written <- FALSE
   for (i in seq_len(nrow(pairs))) {
     q_tmp <- tempfile(pattern = "q_", fileext = ".fa")
     t_tmp <- tempfile(pattern = "t_", fileext = ".fa")
@@ -159,12 +165,8 @@ run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_en
     }
     if (file.exists(tmp_out)) {
       lines_out <- readLines(tmp_out, warn = FALSE)
-      if (!header_written) {
-        writeLines(lines_out, out_con)
-        header_written <- TRUE
-      } else {
-        if (length(lines_out) > 1L) writeLines(lines_out[-1L], out_con)
-      }
+      # IntaRNA writes header in first line; append data only (skip first line)
+      if (length(lines_out) > 1L) writeLines(lines_out[-1L], out_con)
       unlink(tmp_out)
     }
   }

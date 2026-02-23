@@ -356,6 +356,8 @@ When using `--hybridize` and `--use_batchtools` in `chira_extract.py`, IntaRNA j
 
 **Flow:** Phase 1 prepare (per-chunk FASTA and manifests) → Phase 2 R script (submit and wait) → Phase 3 write chimeras from `result.csv` per chunk.
 
+**Important:** The output directory (`-o`) must be on a **shared filesystem** visible from all compute nodes. Each IntaRNA job reads `batchtools_work/<n>/query.fa`, `target.fa`, `pairs.tsv` and writes `batchtools_work/<n>/result.csv`. If `result.csv` is missing or contains only a header, the job likely failed because the path was not visible or writable on the compute node—use an absolute path for `-o` on the shared filesystem and check LSF job logs.
+
 **Options:** Same batchtools options as `chira_map.py` (`--batchtools_queue`, `--batchtools_cores`, `--batchtools_memory`, `--batchtools_walltime`, `--batchtools_template`, `--batchtools_conda_env`, `--batchtools_max_parallel`, `--batchtools_registry`). IntaRNA always runs once per locus pair per chunk (only real chimeric pairs; all-vs-all is not supported).
 
 ## R Scripts: Job Waiting and POSIXct Compatibility
