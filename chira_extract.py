@@ -1297,21 +1297,25 @@ def build_interval_trees():
             d_transcript_interval_trees[transcript_id]['CDS'] = cds_tree
 
 
-def parse_counts_file(crl_file, tpm_cutoff):
+def parse_counts_file(crl_file, tpm_cutoff, rebuild_index=False):
     d_crl_tpm = defaultdict(float)
     l_loci_bed = set()
     prev_readid = None
     read_count = 0
     # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance with large CRL files
     BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
-    
-    # Create read index while parsing (kills two birds with one stone)
+
     index_file = crl_file + '.idx'
+    use_existing_index = (not rebuild_index) and os.path.exists(index_file)
+    if use_existing_index:
+        print(f"Using existing index: {index_file}", file=sys.stderr)
+
+    # Create read index while parsing (unless using existing index)
     read_index_dict = {}
     read_list = []
     current_pos = 0
     line_count_for_read = 0
-    
+
     with open(crl_file, "rb", buffering=BUFFER_SIZE) as fh_crl_file:
         for line_bytes in fh_crl_file:
             line_str = line_bytes.decode('utf-8', errors='replace')
@@ -1319,25 +1323,26 @@ def parse_counts_file(crl_file, tpm_cutoff):
             if len(f) < 13:
                 current_pos = fh_crl_file.tell()
                 continue
-            
+
             readid = '|'.join(f[0].split("|")[:-1])
-            
+
             if readid != prev_readid:
-                if prev_readid is not None:
-                    # Save previous read's line count
-                    read_index_dict[prev_readid] = (read_index_dict[prev_readid][0], line_count_for_read)
-                    line_count_for_read = 0
-                
-                # New read - record its starting position
-                if readid not in read_index_dict:
-                    read_index_dict[readid] = (current_pos, 0)
-                    read_list.append(readid)
-                
+                if not use_existing_index:
+                    if prev_readid is not None:
+                        read_index_dict[prev_readid] = (read_index_dict[prev_readid][0], line_count_for_read)
+                        line_count_for_read = 0
+                    if readid not in read_index_dict:
+                        read_index_dict[readid] = (current_pos, 0)
+                        read_list.append(readid)
+
                 read_count += 1
                 prev_readid = readid
-            
-            line_count_for_read += 1
-            
+                if use_existing_index:
+                    line_count_for_read = 0
+
+            if not use_existing_index:
+                line_count_for_read += 1
+
             crlid = f[3]
             crl_tpm = f[12]
             d_crl_tpm[crlid] = float(crl_tpm)
@@ -1345,18 +1350,31 @@ def parse_counts_file(crl_file, tpm_cutoff):
             locus_bed_entry = "\t".join([":".join(b[0:-3]), b[-3], b[-2], f[9], "1", b[-1]])
             if locus_bed_entry not in l_loci_bed:
                 l_loci_bed.add(locus_bed_entry)
-            
+
             current_pos = fh_crl_file.tell()
-        
-        # Handle last read
-        if prev_readid is not None:
+
+        if not use_existing_index and prev_readid is not None:
             read_index_dict[prev_readid] = (read_index_dict[prev_readid][0], line_count_for_read)
-    
-    # Save index for use by write_chimeras
-    print(f"Saving read index to {index_file}...", file=sys.stderr)
-    with open(index_file, 'wb') as f:
-        pickle.dump((read_index_dict, read_list), f)
-    print(f"Created index for {len(read_list):,} reads", file=sys.stderr)
+
+    if use_existing_index:
+        # Verify existing index matches current CRL (same number of reads); remove if stale
+        try:
+            with open(index_file, 'rb') as f:
+                _, existing_read_list = pickle.load(f)
+            if len(existing_read_list) != read_count:
+                print(f"Warning: Index has {len(existing_read_list):,} reads but CRL has {read_count:,}; removing stale index", file=sys.stderr)
+                try:
+                    os.remove(index_file)
+                except OSError as err:
+                    print(f"Warning: Could not remove stale index: {err}", file=sys.stderr)
+        except (IOError, Exception) as e:
+            print(f"Warning: Could not verify index ({e}); leaving as-is", file=sys.stderr)
+    else:
+        # Save index for use by write_chimeras
+        print(f"Saving read index to {index_file}...", file=sys.stderr)
+        with open(index_file, 'wb') as f:
+            pickle.dump((read_index_dict, read_list), f)
+        print(f"Created index for {len(read_list):,} reads", file=sys.stderr)
 
     uniq_tpms = sorted(list(set(d_crl_tpm.values())))
     
@@ -1956,6 +1974,12 @@ the final output. [0, 1) - values >= 1.0 will be clamped to just below 1.0.""")
     parser.add_argument('-z', '--gzip', action='store_true', dest='compress',
                         help='Compress output files (chimeras and singletons) with gzip')
 
+    # CRL index (.idx)
+    parser.add_argument('--rebuild_index', action='store_true', dest='rebuild_index',
+                        help='Rebuild CRL index even if .idx exists (default: use existing .idx when present)')
+    parser.add_argument('--remove_index', action='store_true', dest='remove_index',
+                        help='Remove the CRL index file (.idx) after processing (default: keep it)')
+
     # Hybridization (IntaRNA)
     parser.add_argument("-r", '--hybridize', action='store_true', dest='hybridize',
                         help="Run IntaRNA to hybridize the predicted chimeras")
@@ -2031,7 +2055,7 @@ def main():
 
     # Parse CRLs file
     print("Parsing CRLs file")
-    no_of_reads, tpm_cutoff_value = parse_counts_file(args.crl_file, args.tpm_cutoff)
+    no_of_reads, tpm_cutoff_value = parse_counts_file(args.crl_file, args.tpm_cutoff, rebuild_index=args.rebuild_index)
     print("Done")
 
     # Run chimera extraction
@@ -2051,14 +2075,15 @@ def main():
     if args.summarize:
         write_interaction_summary(args.outdir, args.sample_name, args.compress, args.processes)
     
-    # Cleanup: Remove index file (no longer needed after processing)
-    index_file = args.crl_file + '.idx'
-    if os.path.exists(index_file):
-        try:
-            os.remove(index_file)
-            print(f"Removed index file: {index_file}", file=sys.stderr)
-        except OSError as e:
-            print(f"Warning: Could not remove index file {index_file}: {e}", file=sys.stderr)
+    # Cleanup: Remove index file only if requested
+    if args.remove_index:
+        index_file = args.crl_file + '.idx'
+        if os.path.exists(index_file):
+            try:
+                os.remove(index_file)
+                print(f"Removed index file: {index_file}", file=sys.stderr)
+            except OSError as e:
+                print(f"Warning: Could not remove index file {index_file}: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
