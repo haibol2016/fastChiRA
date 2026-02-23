@@ -3,7 +3,7 @@
 # Usage: Rscript submit_intarna_batchtools.R <config_json> <jobs_json>
 #
 # Follows the same pattern as submit_chunks_batchtools.R (chira_map.py).
-# Each job runs IntaRNA once per chunk: multi-FASTA query.fa + target.fa -> result.csv (default). With --intarna_per_pair_only, runs once per pair instead.
+# One batchtools job per chunk. Each job runs IntaRNA once per locus pair (N runs inside the job). All-vs-all is not used so only real chimeric pairs are analyzed.
 
 suppressPackageStartupMessages({
   library(batchtools)
@@ -55,7 +55,6 @@ walltime <- config$walltime
 conda_env <- config$conda_env
 intarna_params <- config$intarna_params
 job_name_prefix <- config$job_name_prefix
-try_multi_fasta_first <- if (!is.null(config$intarna_try_multi_fasta_first)) config$intarna_try_multi_fasta_first else TRUE
 max_parallel <- ifelse(is.null(config$max_parallel), nrow(jobs), config$max_parallel)
 template_file <- if (is.null(config$template_file) || config$template_file == "") {
   if (file.exists("lsf_custom.tmpl")) {
@@ -108,9 +107,8 @@ parse_fasta_blocks <- function(path) {
   blocks
 }
 
-# Run IntaRNA. Default: one multi-FASTA run per chunk (query.fa + target.fa -> result.csv).
-# If try_multi_fasta_first is FALSE (--intarna_per_pair_only), run once per pair and merge CSV.
-run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_env = NULL, try_multi_fasta_first = TRUE) {
+# Run IntaRNA once per locus pair (only real chimeric pairs; no all-vs-all).
+run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_env = NULL) {
   chunk_dir <- dirname(query_fa)
   pairs_tsv <- file.path(chunk_dir, "pairs.tsv")
   if (!file.exists(pairs_tsv)) {
@@ -138,16 +136,6 @@ run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_en
     ret
   }
 
-  # Default: one multi-FASTA run per chunk (same as before; result.csv filled by IntaRNA)
-  if (try_multi_fasta_first) {
-    ret <- run_one_intarna(query_fa, target_fa, output_csv)
-    if (!is.null(attr(ret, "status")) && attr(ret, "status") != 0) {
-      stop(sprintf("IntaRNA failed for chunk %s: %s", n, paste(ret, collapse = "\n")))
-    }
-    return(invisible(NULL))
-  }
-
-  # Optional: one IntaRNA run per pair (use --intarna_per_pair_only if multi-FASTA fails in your setup)
   query_blocks <- parse_fasta_blocks(query_fa)
   target_blocks <- parse_fasta_blocks(target_fa)
   if (length(query_blocks) != nrow(pairs) || length(target_blocks) != nrow(pairs)) {
@@ -206,7 +194,7 @@ ids <- batchMap(
   query_fa = jobs$query_fa,
   target_fa = jobs$target_fa,
   output_csv = jobs$output_csv,
-  more.args = list(params = intarna_params, conda_env = conda_env, try_multi_fasta_first = try_multi_fasta_first),
+  more.args = list(params = intarna_params, conda_env = conda_env),
   reg = reg
 )
 

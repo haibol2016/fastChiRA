@@ -912,7 +912,8 @@ def _parse_intarna_csv_to_hybrids(csv_path, pairs_order=None):
     """
     Parse IntaRNA CSV. We run IntaRNA with query=lp1, target=lp2 so id1=lp1, id2=lp2.
     Store under (id1, id2). Lookup in finish_hybridization_write tries (lp1, lp2) then (lp2, lp1).
-    Accepts ; or , separator. Optional: store (lp1, lp2) from pairs_order when it differs from (id1, id2).
+    Accepts ; or , separator. IntaRNA may output multiple rows per (id1, id2); we keep exactly one
+    per pair: the row with lowest energy (most negative MFE in kcal/mol).
     """
     d_hybrids = {}
     if not os.path.exists(csv_path):
@@ -940,7 +941,7 @@ def _parse_intarna_csv_to_hybrids(csv_path, pairs_order=None):
         id2 = parts[1].strip()
         start1, end1, start2, end2 = parts[2], parts[3], parts[4], parts[5]
         hybrid_dp = parts[6].strip()
-        energy = parts[7].strip()
+        energy_str = parts[7].strip()
         if "&" in hybrid_dp:
             target_db, query_db = hybrid_dp.split("&", 1)
             target_db_swap = target_db.replace("(", ")")
@@ -949,9 +950,21 @@ def _parse_intarna_csv_to_hybrids(csv_path, pairs_order=None):
         else:
             dotbracket = hybrid_dp
         pos = start1 + "&" + start2
-        val = (dotbracket, pos, energy, end1, end2)
-        d_hybrids[(id1, id2)] = val
-
+        val = (dotbracket, pos, energy_str, end1, end2)
+        try:
+            energy_float = float(energy_str)
+        except (ValueError, TypeError):
+            energy_float = 0.0
+        key = (id1, id2)
+        if key not in d_hybrids:
+            d_hybrids[key] = (val, energy_float)
+        else:
+            _, existing_energy = d_hybrids[key]
+            # Keep the row with lowest (most negative) energy for this pair
+            if energy_float < existing_energy:
+                d_hybrids[key] = (val, energy_float)
+    # Keep only the value (drop energy used for comparison)
+    d_hybrids = {k: v[0] for k, v in d_hybrids.items()}
 
     if not d_hybrids and data_lines:
         sys.stderr.write(f"Warning: No valid IntaRNA data rows in {csv_path}. First data line: {data_lines[0][:80]!r}\n")
@@ -1082,8 +1095,7 @@ def run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, inta
     if template_file != "lsf-simple":
         template_file = os.path.abspath(template_file)
 
-    # Default: one multi-FASTA run per chunk. With --intarna_per_pair_only, R runs once per pair.
-    try_multi_fasta_first = not getattr(args, 'intarna_per_pair_only', False)
+    # IntaRNA runs once per locus pair only (no all-vs-all; only real chimeric pairs are analyzed).
     config = {
         "reg_dir": reg_dir,
         "queue": queue,
@@ -1095,7 +1107,6 @@ def run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, inta
         "job_name_prefix": job_name_prefix,
         "max_parallel": max_parallel,
         "template_file": template_file,
-        "intarna_try_multi_fasta_first": try_multi_fasta_first,
     }
 
     config_file = os.path.abspath(os.path.join(batchtools_work_dir, "config.json"))
@@ -1781,10 +1792,9 @@ def build_intarna_params(args):
              noseed_param, "-m", args.intarna_mode, "--acc", args.accessibility,
              "--temperature", str(args.temperature), "--seedBP", str(args.seed_bp),
              "--seedMinPu", str(args.seed_min_pu), "--accW", str(args.acc_width)]
-    # IntaRNA multithreading: use batchtools_cores (same as LSF job allocation)
-    cores = getattr(args, 'batchtools_cores', None) or 8
+    # Per-pair runs are small (1×1); use one thread so cluster can run more jobs in parallel.
     parts.append("--threads")
-    parts.append(str(cores))
+    parts.append("1")
     return " ".join(parts)
 
 
@@ -1925,7 +1935,7 @@ def parse_arguments():
                         metavar='', help='Reference genomic FASTA (for IntaRNA accessibility)')
 
     # Parallelism
-    parser.add_argument('-p', '--processes', action='store', type=int, default=1, metavar='',
+    parser.add_argument('-p', '--processes', action='store', type=int, default=8, metavar='',
                         dest='processes',
                         help="""Number of processes to use for chimera extraction, hybridization prep/finish, and merging.""")
 
@@ -1973,9 +1983,6 @@ the final output. [0, 1) - values >= 1.0 will be clamped to just below 1.0.""")
     # Batchtools (HPC cluster for IntaRNA)
     parser.add_argument('--use_batchtools', action='store_true', dest='use_batchtools',
                         help='Use R batchtools to submit IntaRNA jobs to HPC cluster. Requires --hybridize, R with batchtools and IntaRNA on cluster PATH.')
-    parser.add_argument('--intarna_per_pair_only', action='store_true', dest='intarna_per_pair_only',
-                        help="""Run IntaRNA once per locus pair instead of one multi-FASTA run per chunk.
-Use only if multi-FASTA gives empty result.csv. Slower. Default: one IntaRNA run per chunk.""")
     parser.add_argument('--keep_batchtools_work', action='store_true', dest='keep_batchtools_work',
                         help='Keep batchtools work dir for debugging. Default: remove after success.')
     parser.add_argument('--batchtools_registry', action='store', dest='batchtools_registry', default=None, metavar='',
@@ -1984,16 +1991,16 @@ Use only if multi-FASTA gives empty result.csv. Slower. Default: one IntaRNA run
                         help='Path to batchtools LSF template (or "lsf-simple"). Default: lsf_custom.tmpl if present.')
     parser.add_argument('--batchtools_queue', action='store', dest='batchtools_queue', default='long', metavar='',
                         help='LSF queue name for batchtools jobs (default: long)')
-    parser.add_argument('--batchtools_cores', action='store', type=int, default=None, metavar='',
+    parser.add_argument('--batchtools_cores', action='store', type=int, default=1, metavar='',
                         dest='batchtools_cores',
-                        help='Cores per batchtools job and IntaRNA --threads (default: 8)')
+                        help='Cores per LSF job (default: 1). IntaRNA runs with 1 thread; use 1 to run more jobs in parallel.')
     parser.add_argument('--batchtools_memory', action='store', dest='batchtools_memory', default=None, metavar='',
                         help='Total memory per job (e.g. 8GB, 64GB). Converted to per-core for LSF.')
     parser.add_argument('--batchtools_walltime', action='store', dest='batchtools_walltime', default='48:00', metavar='',
                         help='Walltime per job (e.g. 48:00 or 240:00)')
     parser.add_argument('--batchtools_conda_env', action='store', dest='batchtools_conda_env', default=None, metavar='',
                         help='Conda environment path for cluster jobs (optional)')
-    parser.add_argument('--batchtools_max_parallel', action='store', type=int, default=None, metavar='',
+    parser.add_argument('--batchtools_max_parallel', action='store', type=int, default=8, metavar='',
                         dest='batchtools_max_parallel',
                         help='Max concurrent batchtools jobs (default: all chunks at once)')
 

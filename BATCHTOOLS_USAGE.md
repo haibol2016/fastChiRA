@@ -352,11 +352,11 @@ See `lsf_custom.tmpl` for the default template structure.
 
 When using `--hybridize` and `--use_batchtools` in `chira_extract.py`, IntaRNA jobs are submitted via a separate R script:
 
-- **submit_intarna_batchtools.R**: Submits one IntaRNA job per chunk (or per locus pair with `--intarna_per_pair_only`). Reads `config.json` and `jobs.json` from `batchtools_work/`, creates a registry, and submits LSF jobs. Uses the same LSF template and resource options as chunk mapping (`--batchtools_*`). The script **waits for all jobs to complete** before returning (manual polling with `getJobTable` and status counting; no `waitForJobs` to avoid POSIXct compatibility issues in some batchtools versions).
+- **submit_intarna_batchtools.R**: Submits one IntaRNA job per chunk; each job runs IntaRNA once per locus pair (only real chimeric pairs; all-vs-all is not used). Reads `config.json` and `jobs.json` from `batchtools_work/`, creates a registry, and submits LSF jobs. Uses the same LSF template and resource options as chunk mapping (`--batchtools_*`). The script **waits for all jobs to complete** before returning (manual polling with `getJobTable` and status counting; no `waitForJobs` to avoid POSIXct compatibility issues in some batchtools versions).
 
 **Flow:** Phase 1 prepare (per-chunk FASTA and manifests) → Phase 2 R script (submit and wait) → Phase 3 write chimeras from `result.csv` per chunk.
 
-**Options:** Same batchtools options as `chira_map.py` (`--batchtools_queue`, `--batchtools_cores`, `--batchtools_memory`, `--batchtools_walltime`, `--batchtools_template`, `--batchtools_conda_env`, `--batchtools_max_parallel`, `--batchtools_registry`). Plus `--intarna_per_pair_only` to run IntaRNA once per pair instead of one multi-FASTA run per chunk.
+**Options:** Same batchtools options as `chira_map.py` (`--batchtools_queue`, `--batchtools_cores`, `--batchtools_memory`, `--batchtools_walltime`, `--batchtools_template`, `--batchtools_conda_env`, `--batchtools_max_parallel`, `--batchtools_registry`). IntaRNA always runs once per locus pair per chunk (only real chimeric pairs; all-vs-all is not supported).
 
 ## R Scripts: Job Waiting and POSIXct Compatibility
 

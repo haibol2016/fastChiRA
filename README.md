@@ -790,7 +790,6 @@ chira_quantify.py -b segments.bed -m merged.bed -o output_dir -cs 0.7 -ls 10 -p 
 
 **Batchtools (HPC cluster, requires `--hybridize`):**
 - `--use_batchtools`: Submit IntaRNA jobs via R batchtools. Requires R with batchtools and IntaRNA on cluster PATH. See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md).
-- `--intarna_per_pair_only`: Run IntaRNA once per locus pair instead of one multi-FASTA run per chunk (use if multi-FASTA gives empty result.csv).
 - `--keep_batchtools_work`: Keep batchtools work dir after success (default: remove).
 - `--batchtools_registry`: Registry directory (default: `<outdir>/batchtools_work/registry`).
 - `--batchtools_template`: LSF template path or `"lsf-simple"` (default: lsf_custom.tmpl if present).
@@ -800,6 +799,26 @@ chira_quantify.py -b segments.bed -m merged.bed -o output_dir -cs 0.7 -ls 10 -p 
 - `--batchtools_walltime`: Walltime per job (default: 48:00).
 - `--batchtools_conda_env`: Conda environment for cluster jobs (optional).
 - `--batchtools_max_parallel`: Max concurrent batchtools jobs (default: all chunks at once).
+
+**Command-line settings to finish sooner:**
+
+- **Skip steps you don't need:** Omit `-r` / `--hybridize` (and `--use_batchtools`) to skip IntaRNA and finish after extraction and merge. Omit `-s` / `--summarize` if you don't need the interactions file.
+- **More parallelism:** Use a higher `-p` (e.g. `-p 8` or `-p 16`) for chimera extraction and for the number of IntaRNA chunk jobs when using `-r --use_batchtools`. Set `--batchtools_max_parallel` to at least the number of chunks (or leave default so all chunk jobs run at once). Request one core per IntaRNA job with `--batchtools_cores 1` so the cluster can run more jobs in parallel.
+- **Less work (filter earlier):** Raise `-tc` (e.g. `-tc 0.2` or `-tc 0.5`) to drop low-TPM alignments and `-sc` (e.g. `-sc 0.1` or `-sc 0.2`) to drop low-score hybrids; fewer chimeras and less IntaRNA, at the cost of sensitivity.
+- **Faster IntaRNA per job:** Use `-acc N` (default) for no accessibility computation; keep `-m H` (default) for heuristic mode.
+
+**Example — finish as fast as possible with hybridization:**
+```bash
+chira_extract.py -l loci.counts -o out -n mysample -f1 ref.fa -g ref.gtf -f ref_genome.fa \
+  -p 32 -tc 0.2 -sc 0.1 -r --use_batchtools \
+  --batchtools_max_parallel 32 --batchtools_cores 1
+```
+(Adjust `-p` and `--batchtools_max_parallel` to your cluster; use `-tc` / `-sc` only if you accept dropping some low-TPM/low-score chimeras.)
+
+**Example — fastest run without IntaRNA:**
+```bash
+chira_extract.py -l loci.counts -o out -n mysample -f1 ref.fa -g ref.gtf -p 8
+```
 
 **Outputs:**
 
