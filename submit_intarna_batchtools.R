@@ -100,7 +100,7 @@ if (is.null(reg$cluster.functions)) {
 
 # Run IntaRNA once per locus pair (only real chimeric pairs; no all-vs-all).
 # Creates result.csv with at least a header at job start so the file always exists (even if the job fails).
-# On Unix, query/target are passed via bash process substitution <(printf '%s' "$1") so no per-pair temp FASTA files are written.
+# Writes per-pair temp FASTA files and calls IntaRNA with -q / -t paths.
 # Runs multiple pairs in parallel within the job when ncpus > 1 (uses future.apply::future_lapply).
 # Helper and constants are defined inside so they are serialized with the job and available on batchtools workers.
 run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_env = NULL, ncpus = 1L) {
@@ -150,19 +150,6 @@ run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_en
     }
     ret
   }
-  # Run IntaRNA with query/target from process substitution (no temp FASTA files). Unix only; requires bash.
-  run_one_intarna_streaming <- function(q_fasta_str, t_fasta_str, out_file) {
-    other_args <- c(base_args, "--out", out_file)
-    other_quoted <- paste(sapply(other_args, shQuote), collapse = " ")
-    script <- paste0("IntaRNA -q <(printf '%s' \"$1\") -t <(printf '%s' \"$2\") ", other_quoted)
-    if (!is.null(conda_env) && conda_env != "") {
-      conda_init <- 'eval "$(conda shell.bash hook)" 2>/dev/null || source "$(conda info --base)/etc/profile.d/conda.sh" 2>/dev/null || true'
-      conda_activate <- paste("conda activate", shQuote(conda_env))
-      script <- paste(conda_init, "&&", conda_activate, "&&", script)
-    }
-    ret <- system2("bash", c("-c", script, "--", q_fasta_str, t_fasta_str), stdout = TRUE, stderr = TRUE)
-    return(ret)
-  }
 
   query_blocks <- parse_fasta_blocks(query_fa)
   target_blocks <- parse_fasta_blocks(target_fa)
@@ -170,7 +157,6 @@ run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_en
     stop(sprintf("Chunk %s: pair count mismatch (pairs=%d, query blocks=%d, target blocks=%d)",
                  n, nrow(pairs), length(query_blocks), length(target_blocks)))
   }
-  use_streaming <- .Platform$OS.type == "unix"  # process substitution is bash-only; cluster workers are typically Linux
   # Run IntaRNA in parallel (ncpus workers); use future.chunk.size so each worker gets multiple subjobs
   ncpus_int <- as.integer(ncpus)[1L]
   if (is.na(ncpus_int) || ncpus_int < 1L) ncpus_int <- 1L
@@ -190,18 +176,12 @@ run_intarna_job <- function(n, query_fa, target_fa, output_csv, params, conda_en
   results <- future.apply::future_lapply(pair_indices, function(i) {
     tmp_out <- tempfile(pattern = "out_", fileext = ".csv")
     on.exit(unlink(tmp_out, force = TRUE), add = TRUE)
-    if (use_streaming) {
-      q_fasta <- paste0(">", query_blocks[[i]]$id, "\n", query_blocks[[i]]$seq, "\n")
-      t_fasta <- paste0(">", target_blocks[[i]]$id, "\n", target_blocks[[i]]$seq, "\n")
-      ret <- run_one_intarna_streaming(q_fasta, t_fasta, tmp_out)
-    } else {
-      q_tmp <- tempfile(pattern = "q_", fileext = ".fa")
-      t_tmp <- tempfile(pattern = "t_", fileext = ".fa")
-      on.exit(unlink(c(q_tmp, t_tmp), force = TRUE), add = TRUE)
-      writeLines(c(paste0(">", query_blocks[[i]]$id), query_blocks[[i]]$seq), q_tmp)
-      writeLines(c(paste0(">", target_blocks[[i]]$id), target_blocks[[i]]$seq), t_tmp)
-      ret <- run_one_intarna(q_tmp, t_tmp, tmp_out)
-    }
+    q_tmp <- tempfile(pattern = "q_", fileext = ".fa")
+    t_tmp <- tempfile(pattern = "t_", fileext = ".fa")
+    on.exit(unlink(c(q_tmp, t_tmp), force = TRUE), add = TRUE)
+    writeLines(c(paste0(">", query_blocks[[i]]$id), query_blocks[[i]]$seq), q_tmp)
+    writeLines(c(paste0(">", target_blocks[[i]]$id), target_blocks[[i]]$seq), t_tmp)
+    ret <- run_one_intarna(q_tmp, t_tmp, tmp_out)
     if (!is.null(attr(ret, "status")) && attr(ret, "status") != 0) {
       stop(sprintf("IntaRNA failed for pair %d in chunk %s: %s", i, n, paste(ret, collapse = "\n")))
     }
@@ -246,6 +226,7 @@ ids <- batchMap(
   reg = reg
 )
 
+
 if (max_parallel < length(ids)) {
   num_batches <- ceiling(length(ids) / max_parallel)
   remaining_ids <- ids
@@ -253,6 +234,7 @@ if (max_parallel < length(ids)) {
 
   for (batch_idx in 1:num_batches) {
     batch_size <- min(max_parallel, length(remaining_ids))
+    if (batch_size == 0L) break
     batch_ids <- remaining_ids[1:batch_size]
     remaining_ids <- remaining_ids[-(1:batch_size)]
 
