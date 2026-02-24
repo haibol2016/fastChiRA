@@ -845,7 +845,7 @@ def parse_intarna_csv(csv_path):
         id2 = parts[1].strip()
         start1, subseq1 = parts[2].strip(), parts[3].strip()
         start2, subseq2 = parts[4].strip(), parts[5].strip()
-        hybrid_dp = parts[6].strip()
+        dotbracket = parts[6].strip()
         energy_str = parts[7].strip()
         # IntaRNA: seq1 = target (id1), seq2 = query (id2). Store (seq_for_id1, seq_for_id2).
         seq_for_id1 = parts[8].strip() if len(parts) > 8 else None
@@ -854,14 +854,9 @@ def parse_intarna_csv(csv_path):
             seq_for_id1 = None
         if seq_for_id2 == "":
             seq_for_id2 = None
-        if "&" not in hybrid_dp:
+        if "&" not in dotbracket:
             continue
-        # hybridDPfull is target&query (id1&id2) per IntaRNA README
-        id1_part, id2_part = hybrid_dp.split("&", 1)
-        # Chimera output uses locus1&locus2; store in id1&id2 order so (lp1,lp2)=(id1,id2) matches
-        part1_swap = id1_part.replace("(", ")")
-        part2_swap = id2_part.replace(")", "(")
-        dotbracket = part1_swap + "&" + part2_swap  # id1 & id2
+        # hybridDPfull is target&query (id1&id2) per IntaRNA README; keep as-is (id1='(', id2=')')
         pos = start1 + "&" + start2  # id1 & id2
         val = (dotbracket, pos, energy_str, subseq1, subseq2, seq_for_id1, seq_for_id2)
         try:
@@ -1004,7 +999,7 @@ def _merge_hybrid_into_chimeras(file_chimeras, file_out, d_loci_seqs, d_hybrids,
                 tup = d_hybrids[(lp2, lp1)]
                 db, p, energy, subseq_id1, subseq_id2 = tup[0], tup[1], tup[2], tup[3], tup[4]
                 part_id1, part_id2 = db.split("&", 1)  # lp2 part, lp1 part (each has one bracket type)
-                dotbracket = part_id2.replace("(", ")") + "&" + part_id1.replace(")", "(")  # lp1 & lp2
+                dotbracket = part_id2.replace(")", "(") + "&" + part_id1.replace("(", ")")  # lp1 & lp2
                 startpos = p.split("&", 1)[1] + "&" + p.split("&", 1)[0]  # lp1 & lp2
                 hybrid_subseqs = subseq_id2 + "&" + subseq_id1  # id2=lp1, id1=lp2 → lp1 & lp2
                 if len(tup) >= 7 and tup[5] is not None and tup[6] is not None:
