@@ -7,8 +7,8 @@ from collections import defaultdict
 import itertools
 import datetime
 from BCBio import GFF
-from Bio import SeqIO
 import subprocess
+import multiprocessing
 import shutil
 import math
 import json
@@ -17,7 +17,6 @@ import time
 import gzip
 import warnings
 import pickle
-import hashlib
 
 # OPTIMIZATION: Try to import intervaltree for efficient interval queries
 # intervaltree provides O(log n) lookup instead of O(n) linear search
@@ -47,6 +46,7 @@ except ImportError:
 from mpire import WorkerPool
 
 
+
 d_gene_annotations = defaultdict(lambda: defaultdict(str))
 d_transcript_annotations = defaultdict(lambda: defaultdict(list))
 # OPTIMIZATION: Store interval trees for UTR/CDS features per transcript
@@ -54,6 +54,8 @@ d_transcript_annotations = defaultdict(lambda: defaultdict(list))
 d_transcript_interval_trees = defaultdict(dict)  # {transcript_id: {'UTR': IntervalTree, 'CDS': IntervalTree}}
 
 # Constants for chimera list indices
+# *.chimeras.n and *.chimeras.txt are tab-separated (no header on .n chunks).
+# Columns 0-19: read_id, transcript/gene/region info, genomic_coordinates_1/2; 20-21: locus_id_1, locus_id_2 (e.g. chr11:73780216:73780507:+); 22-28: crl_group_id, tpm, scores; 29-34: hybridized_sequences, structure, positions, mfe, mirna_position, hybridized_subsequences.
 CHIMERA_IDX_LOCUS1 = 20
 CHIMERA_IDX_LOCUS2 = 21
 CHIMERA_IDX_SEQUENCES = 29
@@ -61,11 +63,16 @@ CHIMERA_IDX_HYBRID = 30
 CHIMERA_IDX_HYBRID_POS = 31
 CHIMERA_IDX_MFE = 32
 CHIMERA_IDX_MIRNA_POSITION = 33
-CHIMERA_IDX_HYBRID_ENDS = 34
+CHIMERA_IDX_HYBRID_SUBSEQS = 34
 
 # miRNA region types
 MIRNA_REGION_TYPES = ["miRNA", "3p_mature_mir", "5p_mature_mir", "mature_mir"]
 
+# I/O buffer size (2MB) used for GTF, CRL, FASTA, chimera and merge files
+BUFFER_SIZE = 2 * 1024 * 1024
+
+
+# --- Region/strand and GTF annotation (used by extraction) ---
 
 def strandardize(strand):
     if strand == '-1':
@@ -73,6 +80,7 @@ def strandardize(strand):
     elif strand == '1':
         strand = '+'
     return strand
+
 
 
 def guess_region(transcriptid, read_pos):
@@ -225,102 +233,151 @@ def guess_region(transcriptid, read_pos):
     return region
 
 
-def hybridize_with_intarna(seq1, seq2, intarna_params):
-    # assuming first sequence query and second one is target
-    output = os.popen(" ".join(["IntaRNA", intarna_params, "-q", seq1, "-t", seq2])).read()
-    dotbracket = energy = pos = "NA"
-    for alignment in output.split("\n"):
-        if alignment.startswith('target'):
-            dotbracket = alignment.split(";")[3]
-            # exchange the dot bracket notion of query and target
-            target_dotbracket = dotbracket.split("&")[0].replace("(", ")")
-            query_dotbracket = dotbracket.split("&")[1].replace(")", "(")
-            dotbracket = query_dotbracket + "&" + target_dotbracket
-            energy = alignment.split(";")[4]
-            # target is start1, query is start2
-            pos = alignment.split(";")[2] + "&" + alignment.split(";")[1]
-            break
-    return dotbracket, pos, energy
+
+def build_interval_trees():
+    """
+    Build interval trees for UTR and CDS features per transcript.
+    
+    OPTIMIZATION: This enables O(log n) lookup instead of O(n) linear search
+    in guess_region(). Interval trees are built once after parsing annotations,
+    then reused for all region lookups.
+    """
+    # Build UTR interval trees
+    for transcript_id, utr_list in d_transcript_annotations['UTR'].items():
+        utr_tree = IntervalTree()
+        for pos in utr_list:
+            chrom = pos[0]
+            start = int(pos[1])
+            end = int(pos[2]) + 1  # IntervalTree uses [start, end) (end is exclusive)
+            strand = strandardize(pos[3])
+            utr_type = pos[4] if len(pos) > 4 else 'UTR'
+            # Store chrom, strand, utr_type, and original pos for later use
+            # interval.data can store any data associated with the interval
+            utr_tree[start:end] = (chrom, strand, utr_type, pos)
+        if utr_tree:
+            d_transcript_interval_trees[transcript_id]['UTR'] = utr_tree
+    
+    # Build CDS interval trees
+    for transcript_id, cds_list in d_transcript_annotations['CDS'].items():
+        cds_tree = IntervalTree()
+        for pos in cds_list:
+            chrom = pos[0]
+            start = int(pos[1])
+            end = int(pos[2]) + 1  # IntervalTree uses [start, end) (end is exclusive)
+            strand = strandardize(pos[3])
+            # Store chrom, strand, and original pos for later use
+            cds_tree[start:end] = (chrom, strand, pos)
+        if cds_tree:
+            d_transcript_interval_trees[transcript_id]['CDS'] = cds_tree
 
 
-def add_locus_to_set(locus, l_loci_bed):
-    pos = locus.split(":")
-    bed = "\t".join([":".join(pos[0:-3]), pos[-3], pos[-2], locus, "1", pos[-1]])
-    if bed not in l_loci_bed:
-        l_loci_bed.add(bed)
+
+def parse_annotations(f_gtf):
+    n_exon = 1
+    exon_rel_start = 0
+    exon_rel_end = 0
+    exon_len = 0
+    prev_transcript_id = None
+  
+    # Support both generic "UTR" and Ensembl-specific "five_prime_utr"/"three_prime_utr"
+    limit_info = dict(gff_type=["exon", "UTR", "five_prime_utr", "three_prime_utr", "CDS", "miRNA", "tRNA"])
+
+    d_attributes = defaultdict(list)
+    d_attributes['tid'] = ['transcript_id', 'Name']
+    d_attributes['gid'] = ['gene_id', 'Alias']
+    d_attributes['name'] = ['gene_name', 'Name']
+    # Use transcript_biotype first (transcript-level), then gene_biotype as fallback
+    d_attributes['type'] = ['transcript_biotype', 'gene_biotype', 'Type']
+
+    l_seen_exons = set()
+    with open(f_gtf, "r", buffering=BUFFER_SIZE) as gtf_handle:
+        # Chromosome seq level
+        for rec in GFF.parse(gtf_handle, limit_info=limit_info, target_lines=1):
+            # for each selected sub_feature
+            for sub_feature in rec.features:
+
+                # for some reason each qualifier is a list! take the first element
+                for i in d_attributes['gid']:
+                    if i in sub_feature.qualifiers:
+                        gene_id = sub_feature.qualifiers[i][0]
+                        break
+                for i in d_attributes['tid']:
+                    if i in sub_feature.qualifiers:
+                        transcript_id = sub_feature.qualifiers[i][0]
+                        break
+
+                # NOTE: some mature miRs have multiple locations on genome
+                # this is to select only the first location for mature miR
+
+                # Handle UTR features: support both generic "UTR" and Ensembl-specific types
+                if sub_feature.type in ['UTR', 'five_prime_utr', 'three_prime_utr']:
+                    if transcript_id not in d_transcript_annotations['UTR']:
+                        d_transcript_annotations['UTR'][transcript_id] = []
+                    # Store UTR type information for later use in region assignment
+                    utr_type = sub_feature.type
+                    d_transcript_annotations['UTR'][transcript_id].append([rec.id,
+                                                                           str(sub_feature.location.start),
+                                                                           str(sub_feature.location.end),
+                                                                           str(sub_feature.location.strand),
+                                                                           utr_type])
+                elif sub_feature.type == 'CDS':
+                    if transcript_id not in d_transcript_annotations['CDS']:
+                        d_transcript_annotations['CDS'][transcript_id] = []
+                    d_transcript_annotations['CDS'][transcript_id].append([rec.id,
+                                                                           str(sub_feature.location.start),
+                                                                           str(sub_feature.location.end),
+                                                                           str(sub_feature.location.strand)])
+                # remaining are exon, miRNA and tRNA lines
+                else:
+                    if transcript_id + "_e" + str(n_exon).zfill(3) in l_seen_exons:
+                        continue
+
+                    # reset the variables if it is a new transcript
+                    if prev_transcript_id != transcript_id:
+                        d_transcript_annotations['len'][transcript_id] = 0
+                        n_exon = 1
+                        exon_rel_start = 0
+                        exon_rel_end = 0
+                        exon_len = 0
+
+                    d_transcript_annotations['gid'][transcript_id] = gene_id
+                    # biotype
+                    biotype = 'NA'
+                    for i in d_attributes['type']:
+                        if i in sub_feature.qualifiers:
+                            biotype = sub_feature.qualifiers[i][0]
+                    if sub_feature.type == "miRNA":
+                        biotype = "miRNA"
+                    if sub_feature.type == "tRNA":
+                        biotype = "tRNA"
+                    d_gene_annotations['type'][gene_id] = biotype
+
+                    # name
+                    try:
+                        for i in d_attributes['name']:
+                            if i in sub_feature.qualifiers:
+                                d_gene_annotations['name'][gene_id] = sub_feature.qualifiers[i][0]
+                    except KeyError:
+                        d_gene_annotations['name'][gene_id] = "NA"
+
+                    exon_len = sub_feature.location.end - sub_feature.location.start
+                    exon_rel_end = exon_rel_start + exon_len
+                    # TODO: check +1 to length ?
+                    d_transcript_annotations['len'][transcript_id] += exon_len + 1
+                    exon_rel_start = exon_rel_end
+                    prev_transcript_id = transcript_id
+                    l_seen_exons.add(transcript_id + "_e" + str(n_exon).zfill(3))
+                    n_exon += 1
+    
+    # OPTIMIZATION: Build interval trees for UTR/CDS features after parsing annotations
+    # This enables O(log n) lookup instead of O(n) linear search in guess_region()
+    if INTERVALTREE_AVAILABLE:
+        build_interval_trees()
 
 
-def update_best_hits(l_best_hits, hit_type):
-    best_tpm = 0
-    for i, hit in enumerate(l_best_hits):
-        if hit_type == "chimera":
-            tpm = float(hit[24]) + float(hit[25])
-        elif hit_type == "singleton":
-            tpm = float(hit[13])
-        if tpm > best_tpm:
-            best_tpm = tpm
-    l_best_hits = [n for n in l_best_hits if n is not None]
-    for i, hit in enumerate(l_best_hits):
-        if hit_type == "chimera":
-            tpm = float(hit[24]) + float(hit[25])
-        elif hit_type == "singleton":
-            tpm = float(hit[13])
-        if tpm < best_tpm:
-            l_best_hits[i] = None
-    l_best_hits = [n for n in l_best_hits if n is not None]
-    return l_best_hits
 
 
-def extract_annotations(transcriptid, genomic_pos, d_regions, f_gtf):
-    # OPTIMIZATION: Use .get() method for dictionary lookups
-    # More Pythonic and slightly faster than conditional checks
-    # .get() with default value avoids KeyError and is more efficient
-    geneid = d_transcript_annotations['gid'].get(transcriptid, 'NA')
-    name = d_gene_annotations['name'].get(geneid, 'NA')
-    biotype = d_gene_annotations['type'].get(geneid, 'NA')
-    if biotype == 'miRNA' or biotype == 'tRNA':
-        # OPTIMIZATION: Use .get() with default to avoid KeyError check
-        name = d_gene_annotations['family'].get(geneid, name)
-
-    # OPTIMIZATION: Cache region lookups in d_regions dictionary
-    # This avoids repeated calls to guess_region() for the same (transcriptid, genomic_pos) combination
-    # Key format: transcriptid + '\t' + genomic_pos
-    cache_key = transcriptid + '\t' + genomic_pos
-    if cache_key in d_regions:
-        region = d_regions[cache_key]
-    else:
-        region = "NA"
-        if f_gtf:
-            region = guess_region(transcriptid, genomic_pos)
-        if region == "NA":
-            region = biotype
-        # Cache the result for future lookups
-        d_regions[cache_key] = region
-
-    # OPTIMIZATION: Use .get() method for dictionary lookup
-    tx_length = d_transcript_annotations['len'].get(transcriptid, 'NA')
-    return geneid, name, region, tx_length
-
-
-def filter_alignments(lines, tpm_threshold, score_cutoff):
-    l_read_aligns = []
-    for line in lines:
-        f = line.rstrip('\n').split('\t')
-        crl_tpm = f[12]
-        # Correct field indices based on loci.counts header:
-        # Column 10: locus_share (fraction of reads in CRL that map to this locus)
-        # Column 11: read_crl_fraction (EM-optimized probability that read belongs to this CRL)
-        # Column 12: crl_tpm (TPM value for the CRL)
-        locus_share = f[10]
-        read_crl_fraction = f[11]
-        if float(crl_tpm) < tpm_threshold:
-            continue
-        locus_score = float(read_crl_fraction) * float(locus_share)
-        if locus_score < score_cutoff:
-            continue
-        l_read_aligns.append(line)
-    return l_read_aligns
-
+# --- Alignment parsing and locus helpers ---
 
 def parse_alignment_line(alignment_line):
     """
@@ -374,6 +431,90 @@ def parse_alignment_line(alignment_line):
         'tpm_float': tpm_float,  # Cached float value
         'raw_line': alignment_line  # Keep original for compatibility if needed
     }
+
+
+
+def filter_alignments(lines, tpm_threshold, score_cutoff):
+    l_read_aligns = []
+    for line in lines:
+        f = line.rstrip('\n').split('\t')
+        crl_tpm = f[12]
+        # Correct field indices based on loci.counts header:
+        # Column 10: locus_share (fraction of reads in CRL that map to this locus)
+        # Column 11: read_crl_fraction (EM-optimized probability that read belongs to this CRL)
+        # Column 12: crl_tpm (TPM value for the CRL)
+        locus_share = f[10]
+        read_crl_fraction = f[11]
+        if float(crl_tpm) < tpm_threshold:
+            continue
+        locus_score = float(read_crl_fraction) * float(locus_share)
+        if locus_score < score_cutoff:
+            continue
+        l_read_aligns.append(line)
+    return l_read_aligns
+
+
+
+def add_locus_to_set(locus, l_loci_bed):
+    pos = locus.split(":")
+    bed = "\t".join([":".join(pos[0:-3]), pos[-3], pos[-2], locus, "1", pos[-1]])
+    if bed not in l_loci_bed:
+        l_loci_bed.add(bed)
+
+
+
+def update_best_hits(l_best_hits, hit_type):
+    best_tpm = 0
+    for i, hit in enumerate(l_best_hits):
+        if hit_type == "chimera":
+            tpm = float(hit[24]) + float(hit[25])
+        elif hit_type == "singleton":
+            tpm = float(hit[13])
+        if tpm > best_tpm:
+            best_tpm = tpm
+    l_best_hits = [n for n in l_best_hits if n is not None]
+    for i, hit in enumerate(l_best_hits):
+        if hit_type == "chimera":
+            tpm = float(hit[24]) + float(hit[25])
+        elif hit_type == "singleton":
+            tpm = float(hit[13])
+        if tpm < best_tpm:
+            l_best_hits[i] = None
+    l_best_hits = [n for n in l_best_hits if n is not None]
+    return l_best_hits
+
+
+
+def extract_annotations(transcriptid, genomic_pos, d_regions, f_gtf):
+    # OPTIMIZATION: Use .get() method for dictionary lookups
+    # More Pythonic and slightly faster than conditional checks
+    # .get() with default value avoids KeyError and is more efficient
+    geneid = d_transcript_annotations['gid'].get(transcriptid, 'NA')
+    name = d_gene_annotations['name'].get(geneid, 'NA')
+    biotype = d_gene_annotations['type'].get(geneid, 'NA')
+    if biotype == 'miRNA' or biotype == 'tRNA':
+        # OPTIMIZATION: Use .get() with default to avoid KeyError check
+        name = d_gene_annotations['family'].get(geneid, name)
+
+    # OPTIMIZATION: Cache region lookups in d_regions dictionary
+    # This avoids repeated calls to guess_region() for the same (transcriptid, genomic_pos) combination
+    # Key format: transcriptid + '\t' + genomic_pos
+    cache_key = transcriptid + '\t' + genomic_pos
+    if cache_key in d_regions:
+        region = d_regions[cache_key]
+    else:
+        region = "NA"
+        if f_gtf:
+            region = guess_region(transcriptid, genomic_pos)
+        if region == "NA":
+            region = biotype
+        # Cache the result for future lookups
+        d_regions[cache_key] = region
+
+    # OPTIMIZATION: Use .get() method for dictionary lookup
+    tx_length = d_transcript_annotations['len'].get(transcriptid, 'NA')
+    return geneid, name, region, tx_length
+
 
 
 def extract_and_write(readid, l_read_alignments, l_loci_bed, d_ref_lengths1, d_ref_lengths2, f_gtf,
@@ -582,8 +723,7 @@ def extract_and_write(readid, l_read_alignments, l_loci_bed, d_ref_lengths1, d_r
                    "NA",  # hybrid
                    "NA",  # hybrid_pos
                    "NA",  # mfe
-                   mirna_position,
-                   "NA"]  # hybrid_ends (end1&end2 from IntaRNA)
+                   mirna_position]
         chimera_found = True
         l_best_chimeras.append(chimera)
 
@@ -670,6 +810,418 @@ def extract_and_write(readid, l_read_alignments, l_loci_bed, d_ref_lengths1, d_r
             fh_singletons.writelines(output_buffer)
 
 
+
+
+# --- IntaRNA / hybridization ---
+
+def parse_intarna_csv(csv_path):
+    """
+    Parse IntaRNA CSV (--outCsvCols ... E,seq1,seq2). Per IntaRNA README: index 1 = target, 2 = query;
+    id1 = target id, id2 = query id; seq1/subseq1/start1 = target, seq2/subseq2/start2 = query;
+    hybridDPfull = target_part & query_part (id1 & id2). We store dotbracket/pos in id1&id2 order.
+    Returns dict (id1, id2) -> (dotbracket, pos, energy_str, subseq1, subseq2, seq_for_id1, seq_for_id2).
+    Keeps one row per pair (lowest energy).
+    """
+    d_hybrids = {}
+    if not os.path.exists(csv_path):
+        sys.stderr.write(f"Warning: IntaRNA result file not found: {csv_path}\n")
+        sys.stderr.write("  Ensure batchtools LSF jobs completed successfully and the path is accessible from this host.\n")
+        return d_hybrids
+    with open(csv_path, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.read().splitlines()
+    if len(lines) < 2:
+        sys.stderr.write(f"Warning: IntaRNA result file empty or header-only (got {len(lines)} line(s)): {csv_path}\n")
+        return d_hybrids
+
+    data_lines = [ln for ln in lines[1:] if ln.strip()]
+    for line in data_lines:
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.replace(",", ";").split(";")
+        if len(parts) < 8:
+            continue
+        id1 = parts[0].strip()
+        id2 = parts[1].strip()
+        start1, subseq1 = parts[2].strip(), parts[3].strip()
+        start2, subseq2 = parts[4].strip(), parts[5].strip()
+        hybrid_dp = parts[6].strip()
+        energy_str = parts[7].strip()
+        # IntaRNA: seq1 = target (id1), seq2 = query (id2). Store (seq_for_id1, seq_for_id2).
+        seq_for_id1 = parts[8].strip() if len(parts) > 8 else None
+        seq_for_id2 = parts[9].strip() if len(parts) > 9 else None
+        if seq_for_id1 == "":
+            seq_for_id1 = None
+        if seq_for_id2 == "":
+            seq_for_id2 = None
+        if "&" not in hybrid_dp:
+            continue
+        # hybridDPfull is target&query (id1&id2) per IntaRNA README
+        id1_part, id2_part = hybrid_dp.split("&", 1)
+        # Chimera output uses locus1&locus2; store in id1&id2 order so (lp1,lp2)=(id1,id2) matches
+        part1_swap = id1_part.replace("(", ")")
+        part2_swap = id2_part.replace(")", "(")
+        dotbracket = part1_swap + "&" + part2_swap  # id1 & id2
+        pos = start1 + "&" + start2  # id1 & id2
+        val = (dotbracket, pos, energy_str, subseq1, subseq2, seq_for_id1, seq_for_id2)
+        try:
+            energy_float = float(energy_str)
+        except (ValueError, TypeError):
+            energy_float = 0.0
+        key = (id1, id2)
+        if key not in d_hybrids:
+            d_hybrids[key] = (val, energy_float)
+        else:
+            _, existing_energy = d_hybrids[key]
+            if energy_float < existing_energy:
+                d_hybrids[key] = (val, energy_float)
+    d_hybrids = {k: v[0] for k, v in d_hybrids.items()}
+
+    if not d_hybrids and data_lines:
+        sys.stderr.write(f"Warning: No valid IntaRNA data rows in {csv_path}. First data line: {data_lines[0][:80]!r}\n")
+    return d_hybrids
+
+
+
+def hybridize_with_intarna(query_fa_path, target_fa_path, intarna_params, out_csv_path):
+    """
+    Run IntaRNA once on multi-FASTA query and target files (--outPairwise: one result per
+    same-index pair). Used for local hybridization when --use_batchtools is not set.
+    Writes CSV to out_csv_path. Returns dict (id1, id2) -> (dotbracket, pos, energy_str, subseq1, subseq2, seq_for_id1, seq_for_id2)
+    via parse_intarna_csv (same format as batchtools).
+    """
+    cmd = ["IntaRNA"] + (intarna_params.split() if isinstance(intarna_params, str) else list(intarna_params))
+    cmd += ["-q", query_fa_path, "-t", target_fa_path, "--out", out_csv_path]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if result.returncode != 0:
+        return {}
+    return parse_intarna_csv(out_csv_path)
+
+
+
+def _load_loci_seqs_from_fasta(outdir, n, buffer_size=BUFFER_SIZE):
+    """Load d_loci_seqs from loci.fa.<n> (shared helper)."""
+    d_loci_seqs = {}
+    fasta_file = os.path.join(outdir, "loci.fa.") + str(n)
+    with open(fasta_file, 'r', buffering=buffer_size) as fh:
+        current_id = None
+        current_seq = []
+        for line in fh:
+            line_stripped = line.rstrip('\n\r')
+            if line_stripped.startswith('>'):
+                if current_id is not None:
+                    locus_id = current_id[:-3] if len(current_id) >= 3 else current_id
+                    sequence = ''.join(current_seq).upper().replace('T', 'U')
+                    d_loci_seqs[locus_id] = sequence
+                current_id = line_stripped[1:].strip()
+                current_seq = []
+            else:
+                if current_id is not None:
+                    current_seq.append(line_stripped)
+        if current_id is not None:
+            locus_id = current_id[:-3] if len(current_id) >= 3 else current_id
+            sequence = ''.join(current_seq).upper().replace('T', 'U')
+            d_loci_seqs[locus_id] = sequence
+    return d_loci_seqs
+
+
+
+def _collect_unique_locus_pairs(file_chimeras, d_loci_seqs, buffer_size, collect_lines=False):
+    """
+    One pass over a chimera chunk file: collect unique (locus1, locus2) pairs in first-seen order
+    (only pairs where both loci are in d_loci_seqs). Optionally also collect every line with its
+    locus ids for the batchtools finish phase.
+    Returns (unique_pairs, lines_with_loci). If collect_lines is False, lines_with_loci is None.
+    """
+    unique_pairs = []
+    seen = set()
+    lines_with_loci = [] if collect_lines else None
+    with open(file_chimeras, "r", buffering=buffer_size) as fh:
+        for line in fh:
+            a = line.rstrip("\n").split("\t")
+            locuspos1 = a[CHIMERA_IDX_LOCUS1]
+            locuspos2 = a[CHIMERA_IDX_LOCUS2]
+            if collect_lines:
+                lines_with_loci.append((line.rstrip("\n"), locuspos1, locuspos2))
+            if locuspos1 not in d_loci_seqs or locuspos2 not in d_loci_seqs:
+                continue
+            key = (locuspos1, locuspos2)
+            if key not in seen:
+                seen.add(key)
+                unique_pairs.append((locuspos1, locuspos2))
+    return (unique_pairs, lines_with_loci)
+
+
+
+def _write_paired_fasta(unique_pairs, d_loci_seqs, query_fa_path, target_fa_path, buffer_size):
+    """
+    Write multi-FASTA query.fa and target.fa for IntaRNA --outPairwise (one entry per pair;
+    same index = same pair). We call IntaRNA with -q query.fa -t target.fa. IntaRNA uses
+    index 1 = target, index 2 = query (README), so CSV id1=target_locus, id2=query_locus.
+    We assign shorter locus to query, longer to target (IntaRNA recommendation).
+    """
+    with open(query_fa_path, "w", buffering=buffer_size) as fq, \
+         open(target_fa_path, "w", buffering=buffer_size) as ft:
+        for (lp1, lp2) in unique_pairs:
+            s1, s2 = d_loci_seqs[lp1], d_loci_seqs[lp2]
+            # Shorter as query (IntaRNA recommendation; typically miRNA side)
+            if len(s1) <= len(s2):
+                query_locus, target_locus = lp1, lp2
+            else:
+                query_locus, target_locus = lp2, lp1
+            fq.write(">" + query_locus + "\n" + d_loci_seqs[query_locus] + "\n")
+            ft.write(">" + target_locus + "\n" + d_loci_seqs[target_locus] + "\n")
+
+
+
+def _merge_hybrid_into_chimeras(file_chimeras, file_out, d_loci_seqs, d_hybrids, buffer_size, remove_input=False):
+    """
+    Read chimera lines from file_chimeras, fill hybrid columns from d_hybrids (and optionally d_loci_seqs).
+    Chimera columns use locus1 & locus2 order. d_hybrids keys are (id1, id2) with IntaRNA convention
+    (id1=target, id2=query); we map to locus order and swap when key is (lp2, lp1).
+    When remove_input is True (e.g. --remove_intermediate), deletes file_chimeras.
+    """
+    with open(file_chimeras, "r", buffering=buffer_size) as fh_in, \
+         open(file_out, "w", buffering=buffer_size) as fh_out:
+        for line in fh_in:
+            a = line.rstrip("\n").split("\t")
+            seq1 = seq2 = dotbracket = startpos = energy = hybrid_subseqs = "NA"
+            locuspos1 = a[CHIMERA_IDX_LOCUS1]
+            locuspos2 = a[CHIMERA_IDX_LOCUS2]
+            lp1 = locuspos1.strip() if locuspos1 else locuspos1
+            lp2 = locuspos2.strip() if locuspos2 else locuspos2
+            # Resolve full sequences: prefer from d_hybrids (IntaRNA seq1/seq2), else d_loci_seqs
+            if (lp1, lp2) in d_hybrids:
+                tup = d_hybrids[(lp1, lp2)]
+                dotbracket, startpos, energy, subseq1, subseq2 = tup[0], tup[1], tup[2], tup[3], tup[4]
+                hybrid_subseqs = subseq1 + "&" + subseq2
+                if len(tup) >= 7 and tup[5] is not None and tup[6] is not None:
+                    seq1, seq2 = tup[5], tup[6]
+                elif d_loci_seqs and lp1 in d_loci_seqs and lp2 in d_loci_seqs:
+                    seq1, seq2 = d_loci_seqs[lp1], d_loci_seqs[lp2]
+            elif (lp2, lp1) in d_hybrids:
+                # Stored key (id1, id2) = (lp2, lp1): dotbracket/pos/subseqs are lp2&lp1; we need lp1&lp2
+                tup = d_hybrids[(lp2, lp1)]
+                db, p, energy, subseq_id1, subseq_id2 = tup[0], tup[1], tup[2], tup[3], tup[4]
+                part_id1, part_id2 = db.split("&", 1)  # lp2 part, lp1 part (each has one bracket type)
+                dotbracket = part_id2.replace("(", ")") + "&" + part_id1.replace(")", "(")  # lp1 & lp2
+                startpos = p.split("&", 1)[1] + "&" + p.split("&", 1)[0]  # lp1 & lp2
+                hybrid_subseqs = subseq_id2 + "&" + subseq_id1  # id2=lp1, id1=lp2 → lp1 & lp2
+                if len(tup) >= 7 and tup[5] is not None and tup[6] is not None:
+                    seq1, seq2 = tup[6], tup[5]  # seq_for_id1=lp2, seq_for_id2=lp1 → we want lp1, lp2
+                elif d_loci_seqs and lp1 in d_loci_seqs and lp2 in d_loci_seqs:
+                    seq1, seq2 = d_loci_seqs[lp1], d_loci_seqs[lp2]
+            elif d_loci_seqs and lp1 in d_loci_seqs and lp2 in d_loci_seqs:
+                seq1 = d_loci_seqs[lp1]
+                seq2 = d_loci_seqs[lp2]
+            while len(a) <= CHIMERA_IDX_HYBRID_SUBSEQS:
+                a.append("NA")
+            a[CHIMERA_IDX_SEQUENCES] = seq1 + "&" + seq2
+            a[CHIMERA_IDX_HYBRID] = dotbracket
+            a[CHIMERA_IDX_HYBRID_POS] = startpos
+            a[CHIMERA_IDX_MFE] = energy
+            a[CHIMERA_IDX_HYBRID_SUBSEQS] = hybrid_subseqs
+            fh_out.write("\t".join(a) + "\n")
+    if remove_input and os.path.exists(file_chimeras):
+        os.remove(file_chimeras)
+
+
+
+def hybridize_and_write(outdir, intarna_params, n, sample_name, remove_intermediate=False):
+    """
+    Local hybridization: build multi-FASTA query/target from unique locus pairs, run IntaRNA
+    once with --outPairwise, write chimeras-r.<n>. When remove_intermediate: deletes chimeras.<n> and local_intarna_<n>.
+    Used when --hybridize and not --use_batchtools.
+    """
+    d_loci_seqs = _load_loci_seqs_from_fasta(outdir, n)
+    file_chimeras = os.path.join(outdir, sample_name + ".chimeras." + str(n))
+    file_out = os.path.join(outdir, sample_name + ".chimeras-r." + str(n))
+
+    unique_pairs, _ = _collect_unique_locus_pairs(file_chimeras, d_loci_seqs, BUFFER_SIZE, collect_lines=False)
+
+    d_hybrids = {}
+    if unique_pairs:
+        work_dir = os.path.join(outdir, "local_intarna_" + str(n))
+        os.makedirs(work_dir, exist_ok=True)
+        try:
+            query_fa = os.path.join(work_dir, "query.fa")
+            target_fa = os.path.join(work_dir, "target.fa")
+            _write_paired_fasta(unique_pairs, d_loci_seqs, query_fa, target_fa, BUFFER_SIZE)
+            out_csv = os.path.join(work_dir, "intarna_out" + str(n) + ".csv")
+            d_hybrids = hybridize_with_intarna(query_fa, target_fa, intarna_params, out_csv)
+        finally:
+            if remove_intermediate:
+                try:
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                except OSError:
+                    pass
+
+    _merge_hybrid_into_chimeras(file_chimeras, file_out, d_loci_seqs, d_hybrids, BUFFER_SIZE, remove_input=remove_intermediate)
+
+
+
+def prepare_hybridization_batch(outdir, intarna_params, n, sample_name, batchtools_work_dir):
+    """
+    Phase 1 for batchtools: load chimera chunk (*.chimeras.n), write multi-FASTA query.fa and
+    target.fa for one IntaRNA --outPairwise run per chunk. Does not run IntaRNA (worker does).
+    Full locus sequences are obtained from IntaRNA CSV (seq1, seq2) in the finish phase.
+    """
+    d_loci_seqs = _load_loci_seqs_from_fasta(outdir, n, BUFFER_SIZE)
+    file_chimeras = os.path.join(outdir, sample_name + ".chimeras." + str(n))
+    chunk_dir = os.path.join(batchtools_work_dir, str(n))
+    os.makedirs(chunk_dir, exist_ok=True)
+
+    unique_pairs, _ = _collect_unique_locus_pairs(file_chimeras, d_loci_seqs, BUFFER_SIZE, collect_lines=False)
+
+    query_fa = os.path.join(chunk_dir, "query.fa")
+    target_fa = os.path.join(chunk_dir, "target.fa")
+    _write_paired_fasta(unique_pairs, d_loci_seqs, query_fa, target_fa, BUFFER_SIZE)
+
+
+
+def finish_hybridization_write(outdir, n, sample_name, batchtools_work_dir, compress=False, remove_intermediate=False):
+    """
+    Phase 3 for batchtools: read *.chimeras.n and IntaRNA result CSV, write chimeras-r.<n>.
+    Full sequences come from IntaRNA CSV (seq1, seq2); no loci_seqs.pkl. When remove_intermediate, deletes *.chimeras.n.
+    """
+    chunk_dir = os.path.join(batchtools_work_dir, str(n))
+    file_chimeras = os.path.join(outdir, sample_name + ".chimeras." + str(n))
+    output_file = os.path.join(outdir, sample_name + ".chimeras-r." + str(n))
+    result_csv = os.path.join(chunk_dir, "result.csv")
+    d_hybrids = parse_intarna_csv(result_csv) if os.path.exists(result_csv) else {}
+    _merge_hybrid_into_chimeras(file_chimeras, output_file, None, d_hybrids, BUFFER_SIZE, remove_input=remove_intermediate)
+
+
+
+def run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, intarna_params):
+    """
+    Submit IntaRNA jobs via R batchtools (same strategy as chira_map.py). One LSF job per chunk;
+    each job runs process_intarna_chunk_batchtools.py, which runs IntaRNA once per chunk with
+    multi-FASTA query.fa and target.fa (--outPairwise: one result per same-index pair).
+    Writes config.json and chunks.json to registry dir, then calls submit_intarna_batchtools.R.
+    """
+    # Build chunks list: one entry per chunk dir that has query.fa and target.fa (had pairs)
+    chunks_data = []
+    for n in sorted([d for d in os.listdir(batchtools_work_dir) if os.path.isdir(os.path.join(batchtools_work_dir, d)) and d.isdigit()], key=int):
+        chunk_dir = os.path.join(batchtools_work_dir, n)
+        if os.path.exists(os.path.join(chunk_dir, "query.fa")) and os.path.exists(os.path.join(chunk_dir, "target.fa")):
+            chunks_data.append({"chunk_idx": int(n)})
+    if not chunks_data:
+        return
+
+    reg_dir = os.path.abspath(batchtools_registry)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    os.makedirs(reg_dir, exist_ok=True)
+
+    # Resource defaults (match chira_map.py)
+    cores_per_job = getattr(args, 'batchtools_cores', None) or 8
+    if not getattr(args, 'batchtools_cores', None):
+        print("WARNING: --batchtools_cores not specified. Using default: 8 cores per job.", file=sys.stderr)
+    if getattr(args, 'batchtools_memory', None):
+        mem_match = re.match(r'(\d+)(GB|G|MB|M)', (getattr(args, 'batchtools_memory') or '').upper())
+        if mem_match:
+            mem_value = int(mem_match.group(1))
+            mem_unit = mem_match.group(2)
+            total_gb = mem_value / 1024 if mem_unit in ('MB', 'M') else mem_value
+            memory_per_job = f"{total_gb / cores_per_job:.1f}GB"
+        else:
+            memory_per_job = f"{max(0.5, 4.0 / cores_per_job):.1f}GB"
+    else:
+        memory_per_job = f"{max(0.5, 4.0 / cores_per_job):.1f}GB"
+    walltime = getattr(args, 'batchtools_walltime', None) or "48:00"
+    queue = getattr(args, 'batchtools_queue', None) or "long"
+    conda_env = getattr(args, 'batchtools_conda_env', None) or os.environ.get('CONDA_DEFAULT_ENV', '')
+    if conda_env:
+        conda_env = os.path.expanduser(conda_env)
+    max_parallel = getattr(args, 'batchtools_max_parallel', None)
+    job_name_prefix = f"chira_intarna_{os.path.basename(args.outdir)}_{int(time.time())}"
+
+    # Resolve template (same as chira_map.py)
+    template_file = getattr(args, 'batchtools_template', None) or ''
+    if template_file == 'lsf-simple':
+        pass
+    elif template_file:
+        if not os.path.isabs(template_file):
+            template_file = os.path.join(script_dir, template_file)
+        template_file = os.path.abspath(template_file)
+        if not os.path.exists(template_file):
+            print(f"WARNING: Template not found: {template_file}. Using 'lsf-simple'.", file=sys.stderr)
+            template_file = "lsf-simple"
+    else:
+        default_tmpl = os.path.join(script_dir, "lsf_custom.tmpl")
+        template_file = default_tmpl if os.path.exists(default_tmpl) else "lsf-simple"
+    if template_file != "lsf-simple":
+        template_file = os.path.abspath(template_file)
+
+    python_script = os.path.abspath(os.path.join(script_dir, "process_intarna_chunk_batchtools.py"))
+    if not os.path.exists(python_script):
+        raise FileNotFoundError(f"Python worker script not found: {python_script}")
+
+    config = {
+        "reg_dir": reg_dir,
+        "queue": queue,
+        "cores_per_job": cores_per_job,
+        "memory_per_job": memory_per_job,
+        "walltime": walltime,
+        "conda_env": conda_env,
+        "intarna_params": intarna_params,
+        "job_name_prefix": job_name_prefix,
+        "max_parallel": max_parallel,
+        "template_file": template_file,
+        "batchtools_work_dir": os.path.abspath(batchtools_work_dir),
+        "python_script": python_script,
+    }
+
+    config_file = os.path.join(reg_dir, "config.json")
+    chunks_file = os.path.join(reg_dir, "chunks.json")
+    with open(config_file, 'w', encoding='utf-8') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    with open(chunks_file, 'w', encoding='utf-8') as f:
+        json.dump(chunks_data, f, indent=2, ensure_ascii=False)
+
+    r_script = os.path.join(script_dir, "submit_intarna_batchtools.R")
+    if not os.path.exists(r_script):
+        raise FileNotFoundError(f"R script not found: {r_script}")
+
+    cmd = ["Rscript", r_script, os.path.abspath(config_file), os.path.abspath(chunks_file)]
+    print("Submitting IntaRNA jobs via batchtools (chira_map pattern): " + " ".join(cmd), file=sys.stderr)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=86400, cwd=script_dir)
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr or "")
+        raise RuntimeError(f"batchtools R script failed with code {result.returncode}. stderr: {result.stderr!r}")
+
+
+
+def run_batchtools_hybridization(args, common_intarna_params, batchtools_work_dir, batchtools_registry):
+    """Run hybridization using batchtools: prepare (MPIRE) -> R batchtools -> finish (MPIRE)."""
+    # Phase 1: prepare FASTA and manifests per chunk
+    prep_args = [(
+        args.outdir,
+        common_intarna_params,
+        str(k),
+        args.sample_name,
+        batchtools_work_dir
+    ) for k in range(args.processes)]
+    with WorkerPool(n_jobs=args.processes) as pool:
+        pool.map(prepare_hybridization_batch, prep_args, progress_bar=False)
+    # Phase 2: run R batchtools (submits to cluster, waits for completion; same pattern as chira_map)
+    run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, common_intarna_params)
+    # Phase 3: write final output from result CSVs
+    finish_args = [(
+        args.outdir,
+        str(k),
+        args.sample_name,
+        batchtools_work_dir,
+        args.compress,
+        getattr(args, 'remove_intermediate', False)
+    ) for k in range(args.processes)]
+    with WorkerPool(n_jobs=args.processes) as pool:
+        pool.map(finish_hybridization_write, finish_args, progress_bar=False)
+
+
+
+# --- Chunk writing ---
+
 def write_chimeras(chunk_start, chunk_end, total_read_count, d_ref_lengths1, d_ref_lengths2, hybridize,
                    chimeric_overlap, f_gtf, outdir, crl_file, tpm_threshold, score_cutoff, n, sample_name, compress=False, shared_objects=None):
     """
@@ -694,9 +1246,6 @@ def write_chimeras(chunk_start, chunk_end, total_read_count, d_ref_lengths1, d_r
     # This avoids CPU overhead during parallel processing and merge operations
     
     # Open files (intermediate files are always uncompressed)
-    # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance with large files
-    # This reduces system calls and improves throughput, especially for sequential reads/writes
-    BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
     open_func = open
     open_mode = "w"
     
@@ -828,483 +1377,20 @@ def write_chimeras(chunk_start, chunk_end, total_read_count, d_ref_lengths1, d_r
 
     if hybridize:
         # loci sequences are neeeded to hybridize
-        # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance
-        BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
         with open(os.path.join(outdir, "loci.bed.") + str(n), "w", buffering=BUFFER_SIZE) as fh_bed:
             for bed_line in l_loci_bed:
                 fh_bed.write(bed_line + "\n")
 
 
-def _load_loci_seqs_from_fasta(outdir, n, buffer_size=2*1024*1024):
-    """Load d_loci_seqs from loci.fa.<n> (shared helper)."""
-    d_loci_seqs = {}
-    fasta_file = os.path.join(outdir, "loci.fa.") + str(n)
-    with open(fasta_file, 'r', buffering=buffer_size) as fh:
-        current_id = None
-        current_seq = []
-        for line in fh:
-            line_stripped = line.rstrip('\n\r')
-            if line_stripped.startswith('>'):
-                if current_id is not None:
-                    locus_id = current_id[:-3] if len(current_id) >= 3 else current_id
-                    sequence = ''.join(current_seq).upper().replace('T', 'U')
-                    d_loci_seqs[locus_id] = sequence
-                current_id = line_stripped[1:].strip()
-                current_seq = []
-            else:
-                if current_id is not None:
-                    current_seq.append(line_stripped)
-        if current_id is not None:
-            locus_id = current_id[:-3] if len(current_id) >= 3 else current_id
-            sequence = ''.join(current_seq).upper().replace('T', 'U')
-            d_loci_seqs[locus_id] = sequence
-    return d_loci_seqs
 
 
-def prepare_hybridization_batch(outdir, intarna_params, n, sample_name, batchtools_work_dir):
-    """
-    Phase 1 for batchtools: load chimera file, write pairwise FASTA and manifest for chunk n.
-    Saves lines_with_loci and d_loci_seqs for the finish phase. Does not run IntaRNA.
-    """
-    BUFFER_SIZE = 2 * 1024 * 1024
-    d_loci_seqs = _load_loci_seqs_from_fasta(outdir, n, BUFFER_SIZE)
-    file_chimeras = os.path.join(outdir, sample_name + ".chimeras." + str(n))
-    chunk_dir = os.path.join(batchtools_work_dir, str(n))
-    os.makedirs(chunk_dir, exist_ok=True)
-
-    lines_with_loci = []
-    unique_pairs = []
-    seen = set()
-    with open(file_chimeras, 'r', buffering=BUFFER_SIZE) as fh:
-        for line in fh:
-            a = line.rstrip("\n").split("\t")
-            locuspos1 = a[CHIMERA_IDX_LOCUS1]
-            locuspos2 = a[CHIMERA_IDX_LOCUS2]
-            lines_with_loci.append((line.rstrip("\n"), locuspos1, locuspos2))
-            if locuspos1 in d_loci_seqs and locuspos2 in d_loci_seqs:
-                key = (locuspos1, locuspos2)
-                if key not in seen:
-                    seen.add(key)
-                    unique_pairs.append((locuspos1, locuspos2))
-
-    # Write pairwise FASTA (query = locus1, target = locus2; same order for --outPairwise)
-    query_fa = os.path.join(chunk_dir, "query.fa")
-    target_fa = os.path.join(chunk_dir, "target.fa")
-    pairs_tsv = os.path.join(chunk_dir, "pairs.tsv")
-    with open(query_fa, 'w', buffering=BUFFER_SIZE) as fq, open(target_fa, 'w', buffering=BUFFER_SIZE) as ft, open(pairs_tsv, 'w') as fp:
-        for (lp1, lp2) in unique_pairs:
-            # FASTA IDs: use locus IDs (may contain colons; IntaRNA accepts them)
-            fq.write(">" + lp1 + "\n" + d_loci_seqs[lp1] + "\n")
-            ft.write(">" + lp2 + "\n" + d_loci_seqs[lp2] + "\n")
-            fp.write(lp1 + "\t" + lp2 + "\n")
-
-    with open(os.path.join(chunk_dir, "lines.pkl"), 'wb') as f:
-        pickle.dump(lines_with_loci, f)
-    with open(os.path.join(chunk_dir, "loci_seqs.pkl"), 'wb') as f:
-        pickle.dump(d_loci_seqs, f)
-    # So finish phase knows whether IntaRNA was needed
-    with open(os.path.join(chunk_dir, "has_pairs"), 'w') as f:
-        f.write("1" if unique_pairs else "0")
-    return len(unique_pairs)
-
-
-def _parse_intarna_csv_to_hybrids(csv_path, pairs_order=None):
-    """
-    Parse IntaRNA CSV. We run IntaRNA with query=lp1, target=lp2 so id1=lp1, id2=lp2.
-    Store under (id1, id2). Lookup in finish_hybridization_write tries (lp1, lp2) then (lp2, lp1).
-    Accepts ; or , separator. IntaRNA may output multiple rows per (id1, id2); we keep exactly one
-    per pair: the row with lowest energy (most negative MFE in kcal/mol).
-    """
-    d_hybrids = {}
-    if not os.path.exists(csv_path):
-        sys.stderr.write(f"Warning: IntaRNA result file not found: {csv_path}\n")
-        sys.stderr.write("  Ensure batchtools LSF jobs completed successfully and the path is accessible from this host.\n")
-        return d_hybrids
-    with open(csv_path, 'r', encoding='utf-8', errors='replace') as f:
-        # splitlines() handles \n, \r\n, \r so we get one list item per row
-        lines = f.read().splitlines()
-    if len(lines) < 2:
-        sys.stderr.write(f"Warning: IntaRNA result file empty or header-only (got {len(lines)} line(s)): {csv_path}\n")
-        return d_hybrids
-
-    data_lines = [ln for ln in lines[1:] if ln.strip()]
-    for idx, line in enumerate(data_lines):
-        line = line.strip()
-        if not line:
-            continue
-        for sep in (";", ","):
-            parts = line.split(sep)
-            if len(parts) >= 8:
-                break
-        else:
-            continue
-        id1 = parts[0].strip()
-        id2 = parts[1].strip()
-        start1, end1, start2, end2 = parts[2], parts[3], parts[4], parts[5]
-        hybrid_dp = parts[6].strip()
-        energy_str = parts[7].strip()
-        if "&" in hybrid_dp:
-            target_db, query_db = hybrid_dp.split("&", 1)
-            target_db_swap = target_db.replace("(", ")")
-            query_db_swap = query_db.replace(")", "(")
-            dotbracket = query_db_swap + "&" + target_db_swap
-        else:
-            dotbracket = hybrid_dp
-        pos = start1 + "&" + start2
-        val = (dotbracket, pos, energy_str, end1, end2)
-        try:
-            energy_float = float(energy_str)
-        except (ValueError, TypeError):
-            energy_float = 0.0
-        key = (id1, id2)
-        if key not in d_hybrids:
-            d_hybrids[key] = (val, energy_float)
-        else:
-            _, existing_energy = d_hybrids[key]
-            # Keep the row with lowest (most negative) energy for this pair
-            if energy_float < existing_energy:
-                d_hybrids[key] = (val, energy_float)
-    # Keep only the value (drop energy used for comparison)
-    d_hybrids = {k: v[0] for k, v in d_hybrids.items()}
-
-    if not d_hybrids and data_lines:
-        sys.stderr.write(f"Warning: No valid IntaRNA data rows in {csv_path}. First data line: {data_lines[0][:80]!r}\n")
-    return d_hybrids
-
-
-def finish_hybridization_write(outdir, n, sample_name, batchtools_work_dir, compress=False):
-    """
-    Phase 3 for batchtools: load saved lines and IntaRNA result CSV, write chimeras-r.<n>.
-    """
-    BUFFER_SIZE = 2 * 1024 * 1024
-    chunk_dir = os.path.join(batchtools_work_dir, str(n))
-    with open(os.path.join(chunk_dir, "lines.pkl"), 'rb') as f:
-        lines_with_loci = pickle.load(f)
-    with open(os.path.join(chunk_dir, "loci_seqs.pkl"), 'rb') as f:
-        d_loci_seqs = pickle.load(f)
-
-    d_hybrids = {}
-    has_pairs_file = os.path.join(chunk_dir, "has_pairs")
-    has_pairs = False
-    if os.path.exists(has_pairs_file):
-        with open(has_pairs_file) as f:
-            has_pairs = f.read().strip() == "1"
-    if has_pairs:
-        pairs_order = []
-        with open(os.path.join(chunk_dir, "pairs.tsv")) as f:
-            for line in f:
-                toks = line.strip().split("\t", 1)
-                if len(toks) >= 2:
-                    pairs_order.append((toks[0], toks[1]))
-        result_csv = os.path.join(chunk_dir, "result.csv")
-        d_hybrids = _parse_intarna_csv_to_hybrids(result_csv, pairs_order)
-
-    output_file = os.path.join(outdir, sample_name + ".chimeras-r." + str(n))
-    with open(output_file, 'w', buffering=BUFFER_SIZE) as fh_out:
-        for line_str, locuspos1, locuspos2 in lines_with_loci:
-            a = line_str.split("\t")
-            seq1 = seq2 = dotbracket = pos = energy = "NA"
-            end1 = end2 = None
-            # Normalize locus IDs (strip) to match CSV ids
-            lp1 = locuspos1.strip() if locuspos1 else locuspos1
-            lp2 = locuspos2.strip() if locuspos2 else locuspos2
-            if lp1 in d_loci_seqs and lp2 in d_loci_seqs:
-                seq1 = d_loci_seqs[lp1]
-                seq2 = d_loci_seqs[lp2]
-                # Look up IntaRNA result (stored as (id1,id2); try both orders)
-                if (lp1, lp2) in d_hybrids:
-                    dotbracket, pos, energy, end1, end2 = d_hybrids[(lp1, lp2)]
-                elif (lp2, lp1) in d_hybrids:
-                    dotbracket, pos, energy, end1, end2 = d_hybrids[(lp2, lp1)]
-            if len(a) <= CHIMERA_IDX_HYBRID_ENDS:
-                a.extend(["NA"] * (CHIMERA_IDX_HYBRID_ENDS - len(a) + 1))
-            # a is the chimera row (list of columns); assign hybrid fields by integer index
-            a[CHIMERA_IDX_SEQUENCES] = seq1 + "&" + seq2
-            a[CHIMERA_IDX_HYBRID] = dotbracket
-            a[CHIMERA_IDX_HYBRID_POS] = pos
-            a[CHIMERA_IDX_MFE] = energy
-            a[CHIMERA_IDX_HYBRID_ENDS] = (f"{end1}&{end2}" if (end1 is not None and end2 is not None) else "NA")
-            fh_out.write("\t".join(a) + "\n")
-
-    file_chimeras = os.path.join(outdir, sample_name + ".chimeras." + str(n))
-    if os.path.exists(file_chimeras):
-        os.remove(file_chimeras)
-
-
-def run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, intarna_params):
-    """
-    Submit IntaRNA jobs via R batchtools (same pattern as chira_map.py).
-    Writes config.json and jobs.json, then calls submit_intarna_batchtools.R.
-    """
-    # Build jobs list: chunk index n, query_fa, target_fa, output_csv (all absolute paths)
-    jobs_data = []
-    for n in sorted([d for d in os.listdir(batchtools_work_dir) if os.path.isdir(os.path.join(batchtools_work_dir, d)) and d.isdigit()], key=int):
-        chunk_dir = os.path.join(batchtools_work_dir, n)
-        has_pairs_path = os.path.join(chunk_dir, "has_pairs")
-        if not os.path.exists(has_pairs_path):
-            continue
-        with open(has_pairs_path) as f:
-            if f.read().strip() != "1":
-                continue
-        query_fa = os.path.abspath(os.path.join(chunk_dir, "query.fa"))
-        target_fa = os.path.abspath(os.path.join(chunk_dir, "target.fa"))
-        output_csv = os.path.abspath(os.path.join(chunk_dir, "result.csv"))
-        jobs_data.append({"n": n, "query_fa": query_fa, "target_fa": target_fa, "output_csv": output_csv})
-    if not jobs_data:
-        return
-
-    reg_dir = os.path.abspath(batchtools_registry)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # Resource defaults (match chira_map.py)
-    cores_per_job = getattr(args, 'batchtools_cores', None) or 8
-    if not getattr(args, 'batchtools_cores', None):
-        print("WARNING: --batchtools_cores not specified. Using default: 8 cores per job.", file=sys.stderr)
-    if getattr(args, 'batchtools_memory', None):
-        mem_match = re.match(r'(\d+)(GB|G|MB|M)', (getattr(args, 'batchtools_memory') or '').upper())
-        if mem_match:
-            mem_value = int(mem_match.group(1))
-            mem_unit = mem_match.group(2)
-            total_gb = mem_value / 1024 if mem_unit in ('MB', 'M') else mem_value
-            memory_per_job = f"{total_gb / cores_per_job:.1f}GB"
-        else:
-            memory_per_job = f"{max(0.5, 4.0 / cores_per_job):.1f}GB"
-    else:
-        memory_per_job = f"{max(0.5, 4.0 / cores_per_job):.1f}GB"
-    walltime = getattr(args, 'batchtools_walltime', None) or "48:00"
-    queue = getattr(args, 'batchtools_queue', None) or "long"
-    conda_env = getattr(args, 'batchtools_conda_env', None) or os.environ.get('CONDA_DEFAULT_ENV', '')
-    if conda_env:
-        conda_env = os.path.expanduser(conda_env)
-    max_parallel = getattr(args, 'batchtools_max_parallel', None)  # None -> submit all jobs at once
-    job_name_prefix = f"chira_intarna_{os.path.basename(args.outdir)}_{int(time.time())}"
-
-    # Resolve template (same as chira_map.py)
-    template_file = getattr(args, 'batchtools_template', None) or ''
-    if template_file == 'lsf-simple':
-        pass
-    elif template_file:
-        if not os.path.isabs(template_file):
-            template_file = os.path.join(script_dir, template_file)
-        template_file = os.path.abspath(template_file)
-        if not os.path.exists(template_file):
-            print(f"WARNING: Template not found: {template_file}. Using 'lsf-simple'.", file=sys.stderr)
-            template_file = "lsf-simple"
-    else:
-        default_tmpl = os.path.join(script_dir, "lsf_custom.tmpl")
-        template_file = default_tmpl if os.path.exists(default_tmpl) else "lsf-simple"
-    if template_file != "lsf-simple":
-        template_file = os.path.abspath(template_file)
-
-    # IntaRNA runs once per locus pair only (no all-vs-all; only real chimeric pairs are analyzed).
-    config = {
-        "reg_dir": reg_dir,
-        "queue": queue,
-        "cores_per_job": cores_per_job,
-        "memory_per_job": memory_per_job,
-        "walltime": walltime,
-        "conda_env": conda_env,
-        "intarna_params": intarna_params,
-        "job_name_prefix": job_name_prefix,
-        "max_parallel": max_parallel,  # None = all at once (min walltime); int = limit concurrent jobs
-        "template_file": template_file,
-        "poll_sleep_seconds": getattr(args, 'batchtools_poll_interval', None),  # None = use R default (120)
-    }
-
-    config_file = os.path.abspath(os.path.join(batchtools_work_dir, "config.json"))
-    jobs_file = os.path.abspath(os.path.join(batchtools_work_dir, "jobs.json"))
-    with open(config_file, 'w', encoding='utf-8') as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
-    with open(jobs_file, 'w', encoding='utf-8') as f:
-        json.dump(jobs_data, f, indent=2, ensure_ascii=False)
-
-    r_script = os.path.join(script_dir, "submit_intarna_batchtools.R")
-    if not os.path.exists(r_script):
-        raise FileNotFoundError(f"R script not found: {r_script}")
-
-    cmd = ["Rscript", r_script, config_file, jobs_file]
-    print("Submitting IntaRNA jobs via batchtools (chira_map pattern): " + " ".join(cmd), file=sys.stderr)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=86400, cwd=script_dir)
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr or "")
-        raise RuntimeError(f"batchtools R script failed with code {result.returncode}. stderr: {result.stderr!r}")
-
-
-def run_batchtools_hybridization(args, common_intarna_params, batchtools_work_dir, batchtools_registry):
-    """Run hybridization using batchtools: prepare (MPIRE) -> R batchtools -> finish (MPIRE)."""
-    # Phase 1: prepare FASTA and manifests per chunk
-    prep_args = [(
-        args.outdir,
-        common_intarna_params,
-        str(k),
-        args.sample_name,
-        batchtools_work_dir
-    ) for k in range(args.processes)]
-    with WorkerPool(n_jobs=args.processes) as pool:
-        pool.map(prepare_hybridization_batch, prep_args, progress_bar=False)
-    # Phase 2: run R batchtools (submits to cluster, waits for completion; same pattern as chira_map)
-    run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, common_intarna_params)
-    # Phase 3: write final output from result CSVs
-    finish_args = [(
-        args.outdir,
-        str(k),
-        args.sample_name,
-        batchtools_work_dir,
-        args.compress
-    ) for k in range(args.processes)]
-    with WorkerPool(n_jobs=args.processes) as pool:
-        pool.map(finish_hybridization_write, finish_args, progress_bar=False)
-
-def parse_annotations(f_gtf):
-    n_exon = 1
-    exon_rel_start = 0
-    exon_rel_end = 0
-    exon_len = 0
-    prev_transcript_id = None
-  
-    # Support both generic "UTR" and Ensembl-specific "five_prime_utr"/"three_prime_utr"
-    limit_info = dict(gff_type=["exon", "UTR", "five_prime_utr", "three_prime_utr", "CDS", "miRNA", "tRNA"])
-
-    d_attributes = defaultdict(list)
-    d_attributes['tid'] = ['transcript_id', 'Name']
-    d_attributes['gid'] = ['gene_id', 'Alias']
-    d_attributes['name'] = ['gene_name', 'Name']
-    # Use transcript_biotype first (transcript-level), then gene_biotype as fallback
-    d_attributes['type'] = ['transcript_biotype', 'gene_biotype', 'Type']
-
-    l_seen_exons = set()
-    # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance with large GTF files
-    BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
-    with open(f_gtf, "r", buffering=BUFFER_SIZE) as gtf_handle:
-        # Chromosome seq level
-        for rec in GFF.parse(gtf_handle, limit_info=limit_info, target_lines=1):
-            # for each selected sub_feature
-            for sub_feature in rec.features:
-
-                # for some reason each qualifier is a list! take the first element
-                for i in d_attributes['gid']:
-                    if i in sub_feature.qualifiers:
-                        gene_id = sub_feature.qualifiers[i][0]
-                        break
-                for i in d_attributes['tid']:
-                    if i in sub_feature.qualifiers:
-                        transcript_id = sub_feature.qualifiers[i][0]
-                        break
-
-                # NOTE: some mature miRs have multiple locations on genome
-                # this is to select only the first location for mature miR
-
-                # Handle UTR features: support both generic "UTR" and Ensembl-specific types
-                if sub_feature.type in ['UTR', 'five_prime_utr', 'three_prime_utr']:
-                    if transcript_id not in d_transcript_annotations['UTR']:
-                        d_transcript_annotations['UTR'][transcript_id] = []
-                    # Store UTR type information for later use in region assignment
-                    utr_type = sub_feature.type
-                    d_transcript_annotations['UTR'][transcript_id].append([rec.id,
-                                                                           str(sub_feature.location.start),
-                                                                           str(sub_feature.location.end),
-                                                                           str(sub_feature.location.strand),
-                                                                           utr_type])
-                elif sub_feature.type == 'CDS':
-                    if transcript_id not in d_transcript_annotations['CDS']:
-                        d_transcript_annotations['CDS'][transcript_id] = []
-                    d_transcript_annotations['CDS'][transcript_id].append([rec.id,
-                                                                           str(sub_feature.location.start),
-                                                                           str(sub_feature.location.end),
-                                                                           str(sub_feature.location.strand)])
-                # remaining are exon, miRNA and tRNA lines
-                else:
-                    if transcript_id + "_e" + str(n_exon).zfill(3) in l_seen_exons:
-                        continue
-
-                    # reset the variables if it is a new transcript
-                    if prev_transcript_id != transcript_id:
-                        d_transcript_annotations['len'][transcript_id] = 0
-                        n_exon = 1
-                        exon_rel_start = 0
-                        exon_rel_end = 0
-                        exon_len = 0
-
-                    d_transcript_annotations['gid'][transcript_id] = gene_id
-                    # biotype
-                    biotype = 'NA'
-                    for i in d_attributes['type']:
-                        if i in sub_feature.qualifiers:
-                            biotype = sub_feature.qualifiers[i][0]
-                    if sub_feature.type == "miRNA":
-                        biotype = "miRNA"
-                    if sub_feature.type == "tRNA":
-                        biotype = "tRNA"
-                    d_gene_annotations['type'][gene_id] = biotype
-
-                    # name
-                    try:
-                        for i in d_attributes['name']:
-                            if i in sub_feature.qualifiers:
-                                d_gene_annotations['name'][gene_id] = sub_feature.qualifiers[i][0]
-                    except KeyError:
-                        d_gene_annotations['name'][gene_id] = "NA"
-
-                    exon_len = sub_feature.location.end - sub_feature.location.start
-                    exon_rel_end = exon_rel_start + exon_len
-                    # TODO: check +1 to length ?
-                    d_transcript_annotations['len'][transcript_id] += exon_len + 1
-                    exon_rel_start = exon_rel_end
-                    prev_transcript_id = transcript_id
-                    l_seen_exons.add(transcript_id + "_e" + str(n_exon).zfill(3))
-                    n_exon += 1
-    
-    # OPTIMIZATION: Build interval trees for UTR/CDS features after parsing annotations
-    # This enables O(log n) lookup instead of O(n) linear search in guess_region()
-    if INTERVALTREE_AVAILABLE:
-        build_interval_trees()
-
-
-def build_interval_trees():
-    """
-    Build interval trees for UTR and CDS features per transcript.
-    
-    OPTIMIZATION: This enables O(log n) lookup instead of O(n) linear search
-    in guess_region(). Interval trees are built once after parsing annotations,
-    then reused for all region lookups.
-    """
-    # Build UTR interval trees
-    for transcript_id, utr_list in d_transcript_annotations['UTR'].items():
-        utr_tree = IntervalTree()
-        for pos in utr_list:
-            chrom = pos[0]
-            start = int(pos[1])
-            end = int(pos[2]) + 1  # IntervalTree uses [start, end) (end is exclusive)
-            strand = strandardize(pos[3])
-            utr_type = pos[4] if len(pos) > 4 else 'UTR'
-            # Store chrom, strand, utr_type, and original pos for later use
-            # interval.data can store any data associated with the interval
-            utr_tree[start:end] = (chrom, strand, utr_type, pos)
-        if utr_tree:
-            d_transcript_interval_trees[transcript_id]['UTR'] = utr_tree
-    
-    # Build CDS interval trees
-    for transcript_id, cds_list in d_transcript_annotations['CDS'].items():
-        cds_tree = IntervalTree()
-        for pos in cds_list:
-            chrom = pos[0]
-            start = int(pos[1])
-            end = int(pos[2]) + 1  # IntervalTree uses [start, end) (end is exclusive)
-            strand = strandardize(pos[3])
-            # Store chrom, strand, and original pos for later use
-            cds_tree[start:end] = (chrom, strand, pos)
-        if cds_tree:
-            d_transcript_interval_trees[transcript_id]['CDS'] = cds_tree
-
+# --- Counts and merge ---
 
 def parse_counts_file(crl_file, tpm_cutoff, rebuild_index=False):
     d_crl_tpm = defaultdict(float)
     l_loci_bed = set()
     prev_readid = None
     read_count = 0
-    # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance with large CRL files
-    BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
-
     index_file = crl_file + '.idx'
     use_existing_index = (not rebuild_index) and os.path.exists(index_file)
     if use_existing_index:
@@ -1397,27 +1483,19 @@ def parse_counts_file(crl_file, tpm_cutoff, rebuild_index=False):
     return read_count, tpm_threshold
 
 
-def merge_files(inprefix, outfile, header, r, compress=False):
-    # Use shell commands for better performance with large files
-    # This avoids loading all data into memory and leverages system sort
-    # Intermediate files are always uncompressed - only final output is compressed
+
+def merge_files(inprefix, outfile, header, r, compress=False, remove_intermediate=False):
+    # Intermediate files are always uncompressed; only final output is compressed when requested
     temp_files = []
     for i in range(r):
         temp_file = inprefix + "." + str(i)
-        # Intermediate files are NOT compressed
         if os.path.exists(temp_file):
             temp_files.append(temp_file)
-    
     if not temp_files:
-        # No files to merge
         return
     
     # Write header first, then append sorted unique lines
-    # This avoids shell escaping issues with header content
-    # Final output file is compressed if requested (intermediate files are NOT compressed)
-    # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance with large files
-    # Note: gzip.open doesn't support buffering parameter, but Python's gzip module uses internal buffering
-    BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
+    # Note: gzip.open doesn't support buffering parameter; use BUFFER_SIZE for uncompressed output only
     open_func = gzip.open if compress else open
     open_mode = "wt" if compress else "w"
     
@@ -1445,7 +1523,6 @@ def merge_files(inprefix, outfile, header, r, compress=False):
         
         escaped_files = " ".join([f"'{f}'" for f in temp_files])
         cmd = f"cat {escaped_files} | {sort_cmd}"
-        
         # Execute command and write output to file
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, 
                                    stderr=subprocess.PIPE, universal_newlines=True)
@@ -1458,12 +1535,11 @@ def merge_files(inprefix, outfile, header, r, compress=False):
             # Compression happens automatically if open_func is gzip.open
             fh_out.write(stdout)
 
-    # Clean up intermediate per-process files after merging
-    for i in range(r):
-        temp_file = inprefix + "." + str(i)
-        # Intermediate files are NOT compressed
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
+    if remove_intermediate:
+        for i in range(r):
+            temp_file = inprefix + "." + str(i)
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
 
 
 def write_interaction_summary(outdir, sample_name, compress=False, num_threads=4):
@@ -1472,10 +1548,7 @@ def write_interaction_summary(outdir, sample_name, compress=False, num_threads=4
     if compress:
         chimeras_file += ".gz"
 
-    # Open file with gzip if compression is enabled
-    # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance with large files
-    # Note: gzip.open doesn't support buffering parameter, but Python's gzip module uses internal buffering
-    BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
+    # Note: gzip.open doesn't support buffering parameter; use BUFFER_SIZE for uncompressed input only
     open_func = gzip.open if compress else open
     open_mode = "rt" if compress else "r"
 
@@ -1517,24 +1590,18 @@ def write_interaction_summary(outdir, sample_name, compress=False, num_threads=4
                                                                                 f[26], f[27])
                 gene_name1, gene_name2 = gene_name2, gene_name1
             if dotbracket != "NA":
-                hybrid_ends = f[34] if len(f) > 34 else "NA"
-                # Ensure hybridization_pos1/2 and hybridized_sequence1/2 are always set when
-                # dotbracket != "NA", so the "if interaction_otherway" block below never
-                # references undefined names (e.g. when hybrid_ends is NA or column missing).
+                hybrid_subseqs = f[34] if len(f) > 34 else "NA"
                 hybridization_pos1 = hybridization_pos2 = ""
                 hybridized_sequence1 = hybridized_sequence2 = "NA"
-                if hybrid_ends != "NA" and "&" in hybrid_ends:
-                    # IntaRNA: id1=target (locus2), id2=query (locus1). start1,end1 = locus2; start2,end2 = locus1.
-                    end1, end2 = map(int, hybrid_ends.split("&", 1))  # locus2 end, locus1 end (1-based)
+                if hybrid_subseqs != "NA" and "&" in hybrid_subseqs:
+                    # Column 34 and 31 are locus1&locus2: subseq1&subseq2, start1&start2
+                    hybridized_sequence1, hybridized_sequence2 = hybrid_subseqs.split("&", 1)
                     start1, start2 = hybrid_start_pos.split("&", 1)
-                    start1, start2 = int(start1) - 1, int(start2) - 1  # 0-based for slicing
-                    # locus1 (refid1) = query: use start2, end2
-                    # locus2 (refid2) = target: use start1, end1
-                    hybridization_pos1 = f'{refid1}:{int(ref_start1) + start2}-{int(ref_start1) + end2}:{ref_strand1}'
-                    hybridization_pos2 = f'{refid2}:{int(ref_start2) + start1}-{int(ref_start2) + end1}:{ref_strand2}'
-                    hybridized_sequence1 = sequence1[start2:end2]
-                    hybridized_sequence2 = sequence2[start1:end1]
-
+                    start1, start2 = int(start1), int(start2)  # 1-based
+                    end1 = start1 + len(hybridized_sequence1) - 1
+                    end2 = start2 + len(hybridized_sequence2) - 1
+                    hybridization_pos1 = f'{refid1}:{int(ref_start1) + start1 - 1}-{int(ref_start1) + end1}:{ref_strand1}'
+                    hybridization_pos2 = f'{refid2}:{int(ref_start2) + start2 - 1}-{int(ref_start2) + end2}:{ref_strand2}'
                     hybridization_pos = hybridization_pos1 + '&' + hybridization_pos2
                     hybridized_sequences = hybridized_sequence1 + '&' + hybridized_sequence2
 
@@ -1559,8 +1626,6 @@ def write_interaction_summary(outdir, sample_name, compress=False, num_threads=4
                                         tpm1, tpm2, tpm, score1, score2, score])
             d_interactions[interaction]["common"] = [common_info]
 
-    # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance
-    BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
     with open(os.path.join(outdir, "interactions.temp"), "w", buffering=BUFFER_SIZE) as fh_out:
         for interaction in d_interactions.keys():
             fh_out.write("\t".join([str(len(set(d_interactions[interaction]["readid"]))),
@@ -1601,8 +1666,6 @@ def write_interaction_summary(outdir, sample_name, compress=False, num_threads=4
         pass
 
     os.system(sort_cmd + " " + os.path.join(outdir, "interactions.temp") + " > " + os.path.join(outdir, "interactions.sorted"))
-    # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance
-    BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
     with open(os.path.join(outdir, sample_name + ".interactions.txt"), "w", buffering=BUFFER_SIZE) as fh_out:
         fh_out.write("# Note: To identify which locus is miRNA vs target, check the region1 and region2 fields.\n")
         fh_out.write("# miRNA annotations include: miRNA, 3p_mature_mir, 5p_mature_mir, mature_mir\n")
@@ -1614,6 +1677,10 @@ def write_interaction_summary(outdir, sample_name, compress=False, num_threads=4
     os.remove(os.path.join(outdir, "interactions.sorted"))
 
 
+
+
+# --- CLI and main flow ---
+
 def validate_arguments(args):
     """Validate command-line arguments."""
     if args.hybridize and args.f_gtf and not args.f_ref:
@@ -1624,6 +1691,7 @@ def validate_arguments(args):
     if args.temperature < 0 or args.temperature > 100:
         sys.stderr.write("IntaRNA tempertature must be between 0 and 100!\n")
         sys.exit(1)
+
 
 
 def print_configuration(args):
@@ -1649,6 +1717,7 @@ def print_configuration(args):
     print("===================================================================")
 
 
+
 def setup_references(args):
     """Extract reference lengths from fasta files."""
     d_reflen1 = {}
@@ -1657,6 +1726,7 @@ def setup_references(args):
     if args.ref_fasta2:
         chira_utilities.extract_reflengths(args.ref_fasta2, d_reflen2)
     return d_reflen1, d_reflen2
+
 
 
 def run_chimera_extraction(args, d_reflen1, d_reflen2, tpm_cutoff_value, no_of_reads):
@@ -1740,7 +1810,7 @@ def run_chimera_extraction(args, d_reflen1, d_reflen2, tpm_cutoff_value, no_of_r
     # 'fork' provides copy-on-write semantics: shared objects only copied when modified
     # This is the most memory-efficient option when available (50-90% memory reduction)
     # Reference: https://sybrenjansen.github.io/mpire/master/usage/workerpool/shared_objects.html
-    import multiprocessing
+
     # Use 'fork' if available (Unix/Linux), otherwise use default (spawn/forkserver on Windows)
     # fork is not available on Windows, so we check platform and start method
     try:
@@ -1763,6 +1833,7 @@ def run_chimera_extraction(args, d_reflen1, d_reflen2, tpm_cutoff_value, no_of_r
         pool.map(process_chunk, chunk_args, progress_bar=False)
 
 
+
 def prepare_reference_file(args):
     """Prepare reference fasta file for hybridization."""
     if args.f_ref:
@@ -1772,14 +1843,13 @@ def prepare_reference_file(args):
         l_ref = [args.ref_fasta1]
         if args.ref_fasta2:
             l_ref.append(args.ref_fasta2)
-        # OPTIMIZATION: Use larger buffer size (2MB) for better I/O performance
-        BUFFER_SIZE = 2 * 1024 * 1024  # 2MB buffer
         with open(f_reference, 'w', buffering=BUFFER_SIZE) as fh_out_ref:
             for fname in l_ref:
                 with open(fname, 'r', buffering=BUFFER_SIZE) as infile:
                     for lin in infile:
                         fh_out_ref.write(lin)
         return f_reference
+
 
 
 def extract_loci_sequences(args, f_reference):
@@ -1799,61 +1869,65 @@ def extract_loci_sequences(args, f_reference):
             print(l, end="")
 
 
+
 def build_intarna_params(args):
     """Build common IntaRNA parameters string."""
     noseed_param = ""
     if args.no_seed:
         noseed_param = "--noSeed"
-    parts = ["--outMode C", "--outCsvCols id1,id2,start1,end1,start2,end2,hybridDPfull,E",
-             noseed_param, "-m", args.intarna_mode, "--acc", args.accessibility,
+    parts = ["--outMode C", "--outCsvCols id1,id2,start1,subseq1,start2,subseq2,hybridDPfull,E,seq1,seq2",
+             noseed_param, "-m", args.intarna_mode, "--acc", args.accessibility, "--outPairwise=1",
+             "--outNumber=1",
              "--temperature", str(args.temperature), "--seedBP", str(args.seed_bp),
              "--seedMinPu", str(args.seed_min_pu), "--accW", str(args.acc_width)]
     # Per-pair runs are small (1×1); use one thread so cluster can run more jobs in parallel.
     parts.append("--threads")
-    parts.append("1")
+    parts.append("0")
     return " ".join(parts)
 
 
-def run_hybridization(args):
-    """Run hybridization process if enabled. Requires --use_batchtools."""
-    use_batchtools = getattr(args, 'use_batchtools', False)
-    if not use_batchtools:
-        raise RuntimeError(
-            "Hybridization requires --use_batchtools. "
-            "IntaRNA jobs must be submitted to the HPC cluster via batchtools."
-        )
 
+def run_hybridization(args):
+    """Run hybridization: local IntaRNA if --use_batchtools is not set, else batchtools (LSF)."""
+    use_batchtools = getattr(args, 'use_batchtools', False)
     chimeras_prefix = os.path.join(args.outdir, args.sample_name + ".chimeras-r")
     f_reference = prepare_reference_file(args)
 
-    # Extract FASTA sequences for loci
+    # Extract FASTA sequences for loci (needed for both local and batchtools)
     extract_loci_sequences(args, f_reference)
 
-    # Build IntaRNA parameters
     common_intarna_params = build_intarna_params(args)
-    # Use absolute path so finish_hybridization_write looks in the same place the cluster jobs write (jobs.json uses absolute paths).
-    batchtools_work_dir = os.path.abspath(os.path.join(args.outdir, "batchtools_work"))
-    batchtools_registry = getattr(args, 'batchtools_registry', None) or os.path.abspath(os.path.join(batchtools_work_dir, "registry"))
-    os.makedirs(batchtools_work_dir, exist_ok=True)
-    run_batchtools_hybridization(args, common_intarna_params, batchtools_work_dir, batchtools_registry)
-    if not getattr(args, 'keep_batchtools_work', False):
-        if os.path.exists(batchtools_work_dir):
-            shutil.rmtree(batchtools_work_dir, ignore_errors=True)
 
-    # Cleanup intermediate files
-    for k in range(args.processes):
-        for suf in ("loci.fa.", "loci.bed."):
-            p = os.path.join(args.outdir, suf + str(k))
-            if os.path.exists(p):
-                os.remove(p)
+    if use_batchtools:
+        batchtools_work_dir = os.path.abspath(os.path.join(args.outdir, "batchtools_work"))
+        batchtools_registry = getattr(args, 'batchtools_registry', None) or os.path.abspath(os.path.join(batchtools_work_dir, "registry"))
+        os.makedirs(batchtools_work_dir, exist_ok=True)
+        run_batchtools_hybridization(args, common_intarna_params, batchtools_work_dir, batchtools_registry)
+        if getattr(args, 'remove_intermediate', False):
+            if os.path.exists(batchtools_work_dir):
+                shutil.rmtree(batchtools_work_dir, ignore_errors=True)
+    else:
+        # Local hybridization: run IntaRNA per chunk via hybridize_and_write (MPIRE)
+        remove_intermediate = getattr(args, 'remove_intermediate', False)
+        local_hybrid_args = [(args.outdir, common_intarna_params, str(k), args.sample_name, remove_intermediate) for k in range(args.processes)]
+        with WorkerPool(n_jobs=args.processes) as pool:
+            pool.map(lambda t: hybridize_and_write(*t), local_hybrid_args, progress_bar=False)
 
-    if not args.f_ref:
-        if os.path.exists(f_reference):
-            os.remove(f_reference)
-        if os.path.exists(f_reference + ".fai"):
-            os.remove(f_reference + ".fai")
+    # Cleanup intermediate files when --remove_intermediate
+    if getattr(args, 'remove_intermediate', False):
+        for k in range(args.processes):
+            for suf in ("loci.fa.", "loci.bed."):
+                p = os.path.join(args.outdir, suf + str(k))
+                if os.path.exists(p):
+                    os.remove(p)
+        if not args.f_ref:
+            if os.path.exists(f_reference):
+                os.remove(f_reference)
+            if os.path.exists(f_reference + ".fai"):
+                os.remove(f_reference + ".fai")
 
     return chimeras_prefix
+
 
 
 def merge_output_files(args, chimeras_prefix):
@@ -1906,8 +1980,8 @@ def merge_output_files(args, chimeras_prefix):
                                  "hybridization_positions",
                                  "hybridization_mfe_kcal_mol",
                                  "mirna_read_position",
-                                 "hybridization_ends"])
-    merge_files(chimeras_prefix, chimeras_file, header_chimeras, args.processes, args.compress)
+                                 "hybridized_subsequences"])
+    merge_files(chimeras_prefix, chimeras_file, header_chimeras, args.processes, args.compress, getattr(args, 'remove_intermediate', False))
     
     header_singletons = "\t".join(["read_id",
                                    "transcript_id",
@@ -1924,7 +1998,8 @@ def merge_output_files(args, chimeras_prefix):
                                    "crl_group_id",
                                    "tpm",
                                    "alignment_score"])
-    merge_files(singletons_prefix, singletons_file, header_singletons, args.processes, args.compress)
+    merge_files(singletons_prefix, singletons_file, header_singletons, args.processes, args.compress, getattr(args, 'remove_intermediate', False))
+
 
 
 def parse_arguments():
@@ -1951,7 +2026,7 @@ def parse_arguments():
     parser.add_argument('-f', '--ref', action='store', dest='f_ref', required=False,
                         metavar='', help='Reference genomic FASTA (for IntaRNA accessibility)')
 
-    # Parallelism
+    # main job parallelism
     parser.add_argument('-p', '--processes', action='store', type=int, default=8, metavar='',
                         dest='processes',
                         help="""Number of processes to use for chimera extraction, hybridization prep/finish, and merging.""")
@@ -2006,8 +2081,8 @@ the final output. [0, 1) - values >= 1.0 will be clamped to just below 1.0.""")
     # Batchtools (HPC cluster for IntaRNA)
     parser.add_argument('--use_batchtools', action='store_true', dest='use_batchtools',
                         help='Use R batchtools to submit IntaRNA jobs to HPC cluster. Requires --hybridize, R with batchtools and IntaRNA on cluster PATH.')
-    parser.add_argument('--keep_batchtools_work', action='store_true', dest='keep_batchtools_work',
-                        help='Keep batchtools work dir for debugging. Default: remove after success.')
+    parser.add_argument('--remove_intermediate', action='store_true', dest='remove_intermediate',
+                        help='Remove intermediate files after success: loci.fa.<n>, loci.bed.<n>, merged reference (if not -f), work dirs (batchtools_work/ or local_intarna_<n>/), *.chimeras.<n>, and merge inputs (chimeras-r.<n>, singletons.<n>). Default: keep them.')
     parser.add_argument('--batchtools_registry', action='store', dest='batchtools_registry', default=None, metavar='',
                         help='Directory for batchtools registry (default: <outdir>/batchtools_work/registry)')
     parser.add_argument('--batchtools_template', action='store', dest='batchtools_template', default='', metavar='',
@@ -2026,13 +2101,10 @@ the final output. [0, 1) - values >= 1.0 will be clamped to just below 1.0.""")
     parser.add_argument('--batchtools_max_parallel', action='store', type=int, default=None, metavar='',
                         dest='batchtools_max_parallel',
                         help='Max concurrent batchtools jobs (default: None = all chunks at once for minimum walltime)')
-    parser.add_argument('--batchtools_poll_interval', action='store', type=int, default=None, metavar='',
-                        dest='batchtools_poll_interval',
-                        help='Seconds between job status polls (default: 120). Lower = notice completion sooner, more scheduler load.')
-
     parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {chira_utilities.__version__}')
 
     return parser.parse_args()
+
 
 
 def main():
@@ -2088,4 +2160,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

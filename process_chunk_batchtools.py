@@ -26,9 +26,14 @@ def process_chunk_standalone(chunk_file, chunk_idx, chunk_dir,
         alignment_job_types_json: JSON string of alignment job types
         per_chunk_processes: Number of CPU processes for BWA
     """
+    if not os.path.isfile(chunk_file):
+        raise FileNotFoundError(f"Chunk FASTA not found: {chunk_file}")
+    if not os.path.isdir(chunk_dir):
+        raise NotADirectoryError(f"Chunk directory not found: {chunk_dir}")
+
     # Parse alignment job types from JSON
     alignment_job_types = json.loads(alignment_job_types_json)
-    
+
     chunk_outdir = os.path.join(chunk_dir, f"chunk_{chunk_idx:03d}_out")
     os.makedirs(chunk_outdir, exist_ok=True)
     
