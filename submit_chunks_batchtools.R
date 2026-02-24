@@ -253,29 +253,12 @@ if (max_parallel < length(ids)) {
       stop(e)
     })
     
-    # Wait for this batch to complete before submitting next batch (if any remain)
-    # Use manual polling (avoid waitForJobs() which can trigger sum() on POSIXct in some batchtools versions)
-    if (length(remaining_ids) > 0) {
-      cat(sprintf("Waiting for batch %d to complete before submitting next batch...\n", batch_idx))
-      repeat {
-        job_table <- getJobTable(ids = batch_ids, reg = reg)
-        batch_done <- count_status(job_table$done)
-        batch_running <- count_status(job_table$running)
-        batch_error <- count_status(job_table$error)
-        batch_expired <- count_status(job_table$expired)
-        completed <- batch_done + batch_error + batch_expired
-        if (completed >= length(batch_ids)) break
-        cat(sprintf("  Batch %d: %d/%d completed (%d done, %d running, %d error). Waiting...\n",
-                    batch_idx, completed, length(batch_ids), batch_done, batch_running, batch_error))
-        Sys.sleep(30)
-      }
-      job_table <- getJobTable(ids = batch_ids, reg = reg)
-      batch_done <- count_status(job_table$done)
-      batch_error <- count_status(job_table$error)
-      batch_expired <- count_status(job_table$expired)
-      cat(sprintf("Batch %d completed (%d done, %d error, %d expired). Proceeding to next batch.\n",
-                  batch_idx, batch_done, batch_error, batch_expired))
-    }
+    cat(sprintf("Waiting for batch %d to complete...\n", batch_idx))
+    while (!waitForJobs(batch_ids, timeout = walltime_seconds, progressbar = TRUE,
+           sleep = 120, stop.on.error = TRUE, reg = reg)) {
+      Sys.sleep(120)
+    } 
+    cat(sprintf("Batch %d completed.\n", batch_idx))
   }
   submitted_ids <- all_submitted_ids
 } else {
@@ -286,19 +269,12 @@ if (max_parallel < length(ids)) {
   tryCatch({
     submitJobs(ids, resources = resources, reg = reg)
     
-    cat(sprintf("Waiting for all jobs to complete...\n"))
-    repeat {
-      job_table <- getJobTable(ids = ids, reg = reg)
-      batch_done <- count_status(job_table$done)
-      batch_running <- count_status(job_table$running)
-      batch_error <- count_status(job_table$error)
-      batch_expired <- count_status(job_table$expired)
-      completed <- batch_done + batch_error + batch_expired
-      if (completed >= length(ids)) break
-      cat(sprintf("  All jobs: %d/%d completed (%d done, %d running, %d error). Waiting...\n",
-                  completed, length(ids), batch_done, batch_running, batch_error))
-      Sys.sleep(30)
+    cat("Waiting for all jobs to complete...\n")
+    while (!waitForJobs(ids, timeout = walltime_seconds, progressbar = TRUE,
+            sleep = 120, stop.on.error = TRUE, reg = reg)) {
+      Sys.sleep(120)
     }
+    cat("All jobs completed.\n")
     # Verify jobs were actually submitted by checking status
     Sys.sleep(2)  # Give LSF a moment to register jobs
     job_table <- getJobTable(ids = ids, reg = reg)
