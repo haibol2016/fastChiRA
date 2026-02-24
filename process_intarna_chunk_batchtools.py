@@ -32,7 +32,7 @@ def process_chunk_standalone(chunk_dir, intarna_params, ncpus, conda_env=None):
         n_query = f.read().count('>')
     if n_query == 0:
         with open(result_csv, 'w') as f:
-            f.write("id1;id2;start1;subseq1;start2;subseq2;hybridDPfull;E;seq1;seq2\n")
+            f.write("id1;id2;start1;subseq1;start2;subseq2;hybridDPfull;E\n")
         return
 
     # Single IntaRNA run: pairwise mode (one result per query-target pair by index)

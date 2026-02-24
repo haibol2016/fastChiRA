@@ -985,14 +985,12 @@ def _merge_hybrid_into_chimeras(file_chimeras, file_out, d_loci_seqs, d_hybrids,
             locuspos2 = a[CHIMERA_IDX_LOCUS2]
             lp1 = locuspos1.strip() if locuspos1 else locuspos1
             lp2 = locuspos2.strip() if locuspos2 else locuspos2
-            # Resolve full sequences: prefer from d_hybrids (IntaRNA seq1/seq2), else d_loci_seqs
+            # Resolve full sequences from d_loci_seqs (full locus FASTA); d_hybrids only provides structure/energy
             if (lp1, lp2) in d_hybrids:
                 tup = d_hybrids[(lp1, lp2)]
                 dotbracket, startpos, energy, subseq1, subseq2 = tup[0], tup[1], tup[2], tup[3], tup[4]
                 hybrid_subseqs = subseq1 + "&" + subseq2
-                if len(tup) >= 7 and tup[5] is not None and tup[6] is not None:
-                    seq1, seq2 = tup[5], tup[6]
-                elif d_loci_seqs and lp1 in d_loci_seqs and lp2 in d_loci_seqs:
+                if d_loci_seqs and lp1 in d_loci_seqs and lp2 in d_loci_seqs:
                     seq1, seq2 = d_loci_seqs[lp1], d_loci_seqs[lp2]
             elif (lp2, lp1) in d_hybrids:
                 # Stored key (id1, id2) = (lp2, lp1): dotbracket/pos/subseqs are lp2&lp1; we need lp1&lp2
@@ -1002,9 +1000,7 @@ def _merge_hybrid_into_chimeras(file_chimeras, file_out, d_loci_seqs, d_hybrids,
                 dotbracket = part_id2.replace(")", "(") + "&" + part_id1.replace("(", ")")  # lp1 & lp2
                 startpos = p.split("&", 1)[1] + "&" + p.split("&", 1)[0]  # lp1 & lp2
                 hybrid_subseqs = subseq_id2 + "&" + subseq_id1  # id2=lp1, id1=lp2 → lp1 & lp2
-                if len(tup) >= 7 and tup[5] is not None and tup[6] is not None:
-                    seq1, seq2 = tup[6], tup[5]  # seq_for_id1=lp2, seq_for_id2=lp1 → we want lp1, lp2
-                elif d_loci_seqs and lp1 in d_loci_seqs and lp2 in d_loci_seqs:
+                if d_loci_seqs and lp1 in d_loci_seqs and lp2 in d_loci_seqs:
                     seq1, seq2 = d_loci_seqs[lp1], d_loci_seqs[lp2]
             elif d_loci_seqs and lp1 in d_loci_seqs and lp2 in d_loci_seqs:
                 seq1 = d_loci_seqs[lp1]
@@ -1059,7 +1055,8 @@ def prepare_hybridization_batch(outdir, intarna_params, n, sample_name, batchtoo
     """
     Phase 1 for batchtools: load chimera chunk (*.chimeras.n), write multi-FASTA query.fa and
     target.fa for one IntaRNA --outPairwise run per chunk. Does not run IntaRNA (worker does).
-    Full locus sequences are obtained from IntaRNA CSV (seq1, seq2) in the finish phase.
+    Saves d_loci_seqs to chunk dir so finish phase can retrieve full locus sequences even when
+    IntaRNA seq1/seq2 are NA for a pair.
     """
     d_loci_seqs = _load_loci_seqs_from_fasta(outdir, n, BUFFER_SIZE)
     file_chimeras = os.path.join(outdir, sample_name + ".chimeras." + str(n))
@@ -1071,20 +1068,29 @@ def prepare_hybridization_batch(outdir, intarna_params, n, sample_name, batchtoo
     query_fa = os.path.join(chunk_dir, "query.fa")
     target_fa = os.path.join(chunk_dir, "target.fa")
     _write_paired_fasta(unique_pairs, d_loci_seqs, query_fa, target_fa, BUFFER_SIZE)
+    # Persist full locus sequences for finish phase (avoids re-reading loci.fa.<n> and covers NA seq1/seq2)
+    with open(os.path.join(chunk_dir, "loci_seqs.pkl"), "wb") as f:
+        pickle.dump(d_loci_seqs, f)
 
 
 
 def finish_hybridization_write(outdir, n, sample_name, batchtools_work_dir, compress=False, remove_intermediate=False):
     """
     Phase 3 for batchtools: read *.chimeras.n and IntaRNA result CSV, write chimeras-r.<n>.
-    Full sequences come from IntaRNA CSV (seq1, seq2); no loci_seqs.pkl. When remove_intermediate, deletes *.chimeras.n.
+    Uses IntaRNA CSV (seq1, seq2) when available and falls back to d_loci_seqs loaded from
+    loci_seqs.pkl in the chunk dir. When remove_intermediate, deletes *.chimeras.n.
     """
     chunk_dir = os.path.join(batchtools_work_dir, str(n))
     file_chimeras = os.path.join(outdir, sample_name + ".chimeras." + str(n))
     output_file = os.path.join(outdir, sample_name + ".chimeras-r." + str(n))
+    loci_pkl = os.path.join(chunk_dir, "loci_seqs.pkl")
+    d_loci_seqs = {}
+    if os.path.exists(loci_pkl):
+        with open(loci_pkl, "rb") as f:
+            d_loci_seqs = pickle.load(f)
     result_csv = os.path.join(chunk_dir, "result.csv")
     d_hybrids = parse_intarna_csv(result_csv) if os.path.exists(result_csv) else {}
-    _merge_hybrid_into_chimeras(file_chimeras, output_file, None, d_hybrids, BUFFER_SIZE, remove_input=remove_intermediate)
+    _merge_hybrid_into_chimeras(file_chimeras, output_file, d_loci_seqs or None, d_hybrids, BUFFER_SIZE, remove_input=remove_intermediate)
 
 
 
@@ -1870,7 +1876,7 @@ def build_intarna_params(args):
     noseed_param = ""
     if args.no_seed:
         noseed_param = "--noSeed"
-    parts = ["--outMode C", "--outCsvCols id1,id2,start1,subseq1,start2,subseq2,hybridDPfull,E,seq1,seq2",
+    parts = ["--outMode C", "--outCsvCols id1,id2,start1,subseq1,start2,subseq2,hybridDPfull,E",
              noseed_param, "-m", args.intarna_mode, "--acc", args.accessibility, "--outPairwise=1",
              "--outNumber=1",
              "--temperature", str(args.temperature), "--seedBP", str(args.seed_bp),
