@@ -816,7 +816,7 @@ def extract_and_write(readid, l_read_alignments, l_loci_bed, d_ref_lengths1, d_r
 
 def parse_intarna_csv(csv_path):
     """
-    Parse IntaRNA CSV (--outCsvCols ... E,seq1,seq2). Per IntaRNA README: index 1 = target, 2 = query;
+    Parse IntaRNA CSV (--outCsvCols ... E). Per IntaRNA README: index 1 = target, 2 = query;
     id1 = target id, id2 = query id; seq1/subseq1/start1 = target, seq2/subseq2/start2 = query;
     hybridDPfull = target_part & query_part (id1 & id2). We store dotbracket/pos in id1&id2 order.
     Returns dict (id1, id2) -> (dotbracket, pos, energy_str, subseq1, subseq2, seq_for_id1, seq_for_id2).

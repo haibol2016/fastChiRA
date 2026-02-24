@@ -286,6 +286,19 @@ if (max_parallel < length(ids)) {
   tryCatch({
     submitJobs(ids, resources = resources, reg = reg)
     
+    cat(sprintf("Waiting for all jobs to complete...\n"))
+    repeat {
+      job_table <- getJobTable(ids = ids, reg = reg)
+      batch_done <- count_status(job_table$done)
+      batch_running <- count_status(job_table$running)
+      batch_error <- count_status(job_table$error)
+      batch_expired <- count_status(job_table$expired)
+      completed <- batch_done + batch_error + batch_expired
+      if (completed >= length(ids)) break
+      cat(sprintf("  All jobs: %d/%d completed (%d done, %d running, %d error). Waiting...\n",
+                  completed, length(ids), batch_done, batch_running, batch_error))
+      Sys.sleep(30)
+    }
     # Verify jobs were actually submitted by checking status
     Sys.sleep(2)  # Give LSF a moment to register jobs
     job_table <- getJobTable(ids = ids, reg = reg)

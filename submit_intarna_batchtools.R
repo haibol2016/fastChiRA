@@ -167,7 +167,10 @@ if (max_parallel < length(ids)) {
     })
 
     cat(sprintf("Waiting for batch %d to complete...\n", batch_idx))
-    waitForJobs(batch_ids, timeout = walltime_seconds, sleep = 120, stop.on.error = TRUE, reg = reg)
+    while (!waitForJobs(batch_ids, timeout = walltime_seconds, progressbar = TRUE,
+           sleep = 120, stop.on.error = TRUE, reg = reg)) {
+      Sys.sleep(120)
+    } 
     cat(sprintf("Batch %d completed.\n", batch_idx))
   }
   submitted_ids <- all_submitted
@@ -176,14 +179,18 @@ if (max_parallel < length(ids)) {
   tryCatch({
     submitJobs(ids, resources = resources, reg = reg)
     submitted_ids <- ids
+
+    cat("Waiting for all jobs to complete...\n")
+    while (!waitForJobs(ids, timeout = walltime_seconds, progressbar = TRUE,
+            sleep = 120, stop.on.error = TRUE, reg = reg)) {
+      Sys.sleep(120)
+    }
+    cat("All jobs completed.\n")
   }, error = function(e) {
     cat(sprintf("ERROR: %s\n", as.character(e)))
     stop(e)
   })
 
-  cat("Waiting for all jobs to complete...\n")
-  waitForJobs(ids, timeout = walltime_seconds, sleep = 120, stop.on.error = TRUE,reg = reg)
-  cat("All jobs completed.\n")
 }
 
 job_table <- getJobTable(ids = submitted_ids, reg = reg)
@@ -192,7 +199,8 @@ n_expired <- count_status(job_table$expired)
 if (n_error > 0L || n_expired > 0L) {
   error_or_expired <- !is.na(job_table$error) | !is.na(job_table$expired)
   failed <- submitted_ids[error_or_expired]
-  cat(sprintf("\nERROR: %d job(s) failed or expired. Failed job IDs: %s\n", n_error + n_expired, paste(failed, collapse = ", ")), file = stderr())
+  cat(sprintf("\nERROR: %d job(s) failed or expired. Failed job IDs: %s\n", n_error + n_expired, 
+              paste(failed, collapse = ", ")), file = stderr())
   quit(status = 1L, save = "no")
 }
 
