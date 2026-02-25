@@ -6,7 +6,7 @@ import os
 
 # Read version from chira_utilities.py (single source of truth)
 # The version is defined as __version__ = "X.Y.Z" in chira_utilities.py
-version = "1.4.13"  # Default fallback version
+version = "1.4.14"  # Default fallback version
 try:
     # Import chira_utilities to get the version
     import chira_utilities

@@ -13,7 +13,7 @@ from Bio import SeqIO
 from datetime import datetime
 
 # Version number - single source of truth for all ChiRA scripts
-__version__ = "1.4.13"
+__version__ = "1.4.14"
 
 
 def _enable_unbuffered_stdout_stderr():

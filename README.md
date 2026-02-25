@@ -1,13 +1,14 @@
 # ChiRA - Chimeric Read Analyzer
 
-**Version**: 1.4.13 (Modified with performance optimizations and parallel computing support)
+**Version**: 1.4.14 (Modified with performance optimizations and parallel computing support)
 
 ChiRA is a set of tools to analyze RNA-RNA interactome experimental data such as CLASH, CLEAR-CLIP, PARIS, SPLASH etc. Following are the descriptions of the each tool. Here we provide descriptions about the input and ouptput files. For the detailed description of the other parameters please look at the help texts of tools.
 
 **Note**: fastChiRA is a modified version of ChiRA (based on v1.4.3) with significant performance optimizations and new features. The original code is licensed under GPL v3, and this modified version maintains the same license. All changes are documented in the "Recent Improvements" section below and in [CHANGELOG.md](CHANGELOG.md).
 
 ## Version History
-- **v1.4.13** (Current, 2026-02-21): Batchtools/IntaRNA fixes: wait for all batches (including last), POSIXct-safe job status counting and manual polling in R scripts, CSV line-ending handling in chira_extract; IntaRNA sequences from loci_seqs.pkl (no seq1/seq2 in CSV); merge_intarna_into_chimeras.py for post-IntaRNA merge when main job times out
+- **v1.4.14** (Current, 2026-02-21): Version bump; documentation updates (final table column names, CLI args, future/future.apply removed)
+- **v1.4.13** (2026-02-21): Batchtools/IntaRNA fixes: wait for all batches (including last), POSIXct-safe job status counting and manual polling in R scripts, CSV line-ending handling in chira_extract; IntaRNA sequences from loci_seqs.pkl (no seq1/seq2 in CSV); merge_intarna_into_chimeras.py for post-IntaRNA merge when main job times out
 - **v1.4.11** (2026-02-17): MPIRE made required dependency for optimal multiprocessing performance, removed fallback code, improved memory efficiency (50-90% reduction) and startup time (2-3x faster)
 - **v1.4.10** (2026-02-15): Fixed batchtools submission issues (template path handling, JSON parsing), ensured all paths are absolute for cluster jobs, and refactored scripts for better code organization
 - **v1.4.9** (2026-02-15): Added `--parallel_chunks` parameter for configurable chunk parallelism in chira_map.py
