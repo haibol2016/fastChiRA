@@ -167,7 +167,7 @@ if (max_parallel < length(ids)) {
     })
 
     cat(sprintf("Waiting for batch %d to complete...\n", batch_idx))
-    while (!waitForJobs(batch_ids, timeout = walltime_seconds, progressbar = TRUE,
+    while (!waitForJobs(batch_ids, timeout = walltime_seconds,
            sleep = 120, stop.on.error = TRUE, reg = reg)) {
       Sys.sleep(120)
     } 
@@ -181,7 +181,7 @@ if (max_parallel < length(ids)) {
     submitted_ids <- ids
 
     cat("Waiting for all jobs to complete...\n")
-    while (!waitForJobs(ids, timeout = walltime_seconds, progressbar = TRUE,
+    while (!waitForJobs(ids, timeout = walltime_seconds,
             sleep = 120, stop.on.error = TRUE, reg = reg)) {
       Sys.sleep(120)
     }
