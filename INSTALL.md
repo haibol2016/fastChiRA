@@ -110,7 +110,7 @@ conda install -c conda-forge r-base
 
 **Important**: All file paths are automatically converted to absolute paths for cluster job execution. No manual path conversion is needed.
 
-**Scripts**: `submit_chunks_batchtools.R` is used for mapping chunks; `submit_intarna_batchtools.R` is used for IntaRNA hybridization when both `--hybridize` and `--use_batchtools` are set in `chira_extract.py`.
+**Scripts**: `submit_chunks_batchtools.R` is used for mapping chunks; `submit_intarna_batchtools.R` is used for IntaRNA hybridization when both `--hybridize` and `--use_batchtools` are set in `chira_extract.py`. If the main job times out after submitting IntaRNA jobs, run `merge_intarna_into_chimeras.py` (see [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md) and [README.md](README.md)) after all IntaRNA jobs complete to produce final chimeras.txt, singletons.txt, and interactions.txt.
 
 ## Troubleshooting
 

@@ -18,19 +18,17 @@ ChiRA supports R batchtools as a backend for submitting chunk processing jobs to
    conda install -c conda-forge r-base
    ```
 
-2. **R packages** - `batchtools`, `jsonlite`, and (for IntaRNA) `future` and `future.apply`:
+2. **R packages** - `batchtools` and `jsonlite`:
    ```r
    install.packages(c("batchtools", "jsonlite"))
-   install.packages(c("future", "future.apply"))  # for submit_intarna_batchtools.R
    ```
    Or via conda:
    ```bash
-   conda install -c conda-forge r-batchtools r-jsonlite r-future r-future.apply
+   conda install -c conda-forge r-batchtools r-jsonlite
    ```
    - **batchtools**: Submitting chunk-based batch jobs to HPC cluster schedulers (LSF, SLURM, SGE, etc.)
    - **jsonlite**: Parsing JSON configuration files for batchtools job submission
-   - **future** / **future.apply**: Used by `submit_intarna_batchtools.R` for parallel IntaRNA runs within each job. Install these in the **same conda environment as IntaRNA** (e.g. the env specified by `--batchtools_conda_env`) so cluster workers load them when running the job.
-   - **Note**: `jsonlite` is usually installed automatically as a dependency of `batchtools`; install `future` and `future.apply` in your IntaRNA conda env when using hybridization with batchtools.
+   - **Note**: `jsonlite` is usually installed automatically as a dependency of `batchtools`.
 
 3. **LSF scheduler** available on your cluster
 
@@ -84,7 +82,6 @@ python chira_map.py \
   - Limits how many jobs run simultaneously
   - Example: `--batchtools_max_parallel 2` → only 2 jobs run at a time, others wait
   - Useful if cluster has job limits per user
-- `--batchtools_poll_interval`: Seconds between job-status polls (default: 120). Lower (e.g. 60) shortens time until completion is detected.
 - `--batchtools_conda_env`: Conda environment path (default: auto-detect from `CONDA_DEFAULT_ENV`)
 - `--batchtools_template`: LSF template file (default: `lsf_custom.tmpl` in ChiRA directory)
   - Can be an absolute path to a custom template file
@@ -93,7 +90,7 @@ python chira_map.py \
   - Uses proven template based on InPAS implementation
   - Only change if you need custom LSF directives
 
-**Minimizing walltime (IntaRNA / chira_extract):** Leave `--batchtools_max_parallel` unset so all chunk jobs are submitted at once; use high `-p` and `--batchtools_cores` (or `--batchtools_cores 1` to maximize concurrent jobs). Optionally set `--batchtools_poll_interval 60` so completion is detected sooner.
+**Minimizing walltime (IntaRNA / chira_extract):** Leave `--batchtools_max_parallel` unset so all chunk jobs are submitted at once; use high `-p` and `--batchtools_cores` (or `--batchtools_cores 1` to maximize concurrent jobs).
 
 ### Example: Full Command with Parallel Processing
 
@@ -359,9 +356,13 @@ When using `--hybridize` and `--use_batchtools` in `chira_extract.py`, IntaRNA j
 
 - **submit_intarna_batchtools.R**: Submits one IntaRNA job per chunk; each job runs IntaRNA once per locus pair (only real chimeric pairs; all-vs-all is not used). Reads `config.json` and `jobs.json` from `batchtools_work/`, creates a registry, and submits LSF jobs. Uses the same LSF template and resource options as chunk mapping (`--batchtools_*`). The script **waits for all jobs to complete** before returning (manual polling with `getJobTable` and status counting; no `waitForJobs` to avoid POSIXct compatibility issues in some batchtools versions).
 
-**Flow:** Phase 1 prepare (per-chunk FASTA and manifests) → Phase 2 R script (submit and wait) → Phase 3 write chimeras from `result.csv` per chunk.
+**Flow:** Phase 1 prepare (per-chunk FASTA, manifests, and `loci_seqs.pkl`) → Phase 2 R script (submit and wait) → Phase 3 finish: load `loci_seqs.pkl` and `result.csv` per chunk, merge IntaRNA results into chimeras, write `*.chimeras-r.<n>` and merge/summarize to final outputs.
 
-**Important:** The output directory (`-o`) must be on a **shared filesystem** visible from all compute nodes. Each IntaRNA job reads `batchtools_work/<n>/query.fa` and `target.fa` and writes `batchtools_work/<n>/result.csv`. If `result.csv` is missing or contains only a header, the job likely failed because the path was not visible or writable on the compute node—use an absolute path for `-o` on the shared filesystem and check LSF job logs.
+**Per-chunk files:** Prepare writes `batchtools_work/<n>/query.fa`, `target.fa`, and `loci_seqs.pkl` (locus ID → full sequence). IntaRNA is not asked for seq1/seq2 in the CSV; full sequences come from `loci_seqs.pkl` when merging. Each job reads `query.fa` and `target.fa` and writes `batchtools_work/<n>/result.csv`.
+
+**Important:** The output directory (`-o`) must be on a **shared filesystem** visible from all compute nodes. If `result.csv` is missing or contains only a header, the job likely failed because the path was not visible or writable on the compute node—use an absolute path for `-o` on the shared filesystem and check LSF job logs.
+
+**If the main job times out after submitting IntaRNA jobs:** Run **merge_intarna_into_chimeras.py** after all IntaRNA jobs have completed. It processes all chunks (merge `loci_seqs.pkl` + `result.csv` into `*.chimeras-r.<n>`), then merges `*.chimeras-r.<n>` → `{sample_name}.chimeras.txt`, `*.singletons.<n>` → `{sample_name}.singletons.txt`, and generates `{sample_name}.interactions.txt`. Required args: `--outdir`, `--sample-name`, `--n-chunks`. Optional: `--chunk-root` (default `outdir/batchtools_work`), `--remove-input`, `--buffer-size`. See script docstring and [README.md](README.md) Utility Scripts.
 
 **Options:** Same batchtools options as `chira_map.py` (`--batchtools_queue`, `--batchtools_cores`, `--batchtools_memory`, `--batchtools_walltime`, `--batchtools_template`, `--batchtools_conda_env`, `--batchtools_max_parallel`, `--batchtools_registry`). IntaRNA always runs once per locus pair per chunk (only real chimeric pairs; all-vs-all is not supported).
 
@@ -372,8 +373,10 @@ Both `submit_chunks_batchtools.R` and `submit_intarna_batchtools.R` use **manual
 ## Files Created
 
 - `process_chunk_batchtools.py`: Standalone script for processing one chunk (called by each batchtools job for mapping)
+- `process_intarna_chunk_batchtools.py`: Worker script invoked by IntaRNA batchtools jobs (one run per chunk)
 - `submit_chunks_batchtools.R`: R script that submits mapping chunk jobs via batchtools
 - `submit_intarna_batchtools.R`: R script that submits IntaRNA jobs via batchtools (used by `chira_extract.py --hybridize --use_batchtools`)
+- `merge_intarna_into_chimeras.py`: Standalone script to merge IntaRNA results into chimeras and produce final chimeras.txt, singletons.txt, and interactions.txt (use when the main `chira_extract.py` job times out after submitting IntaRNA jobs)
 - `lsf_custom.tmpl`: Default LSF template file (included with ChiRA)
 - `output_dir/batchtools_registry_<timestamp>/`: Batchtools registry directory containing:
   - `config.json`: Job configuration with all absolute paths

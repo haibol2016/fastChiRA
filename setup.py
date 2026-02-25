@@ -62,6 +62,8 @@ setup(
         "extract_transcripts_from_genome.py",
         "remove_mirna_hairpin_from_gtf.py",
         "process_chunk_batchtools.py",
+        "process_intarna_chunk_batchtools.py",
+        "merge_intarna_into_chimeras.py",
         "submit_chunks_batchtools.R",
         "submit_intarna_batchtools.R",
     ],

@@ -312,8 +312,10 @@ ChiRA scripts support parallel processing to improve performance on multi-core s
 - **concatenate_gtf.py**: No external dependencies (uses standard library only)
 - **extract_transcripts_from_genome.py**: Requires `gffread` (conda: `conda install -c bioconda gffread`)
 - **process_chunk_batchtools.py**: Imports `chira_map` and `chira_utilities`; called by batchtools jobs for mapping chunks
+- **process_intarna_chunk_batchtools.py**: Called by IntaRNA batchtools jobs (one run per chunk)
 - **submit_chunks_batchtools.R**: Requires R with `batchtools` and `jsonlite` (used by `chira_map.py` for HPC cluster submission)
 - **submit_intarna_batchtools.R**: Requires R with `batchtools` and `jsonlite` (used by `chira_extract.py` for IntaRNA when `--hybridize --use_batchtools`)
+- **merge_intarna_into_chimeras.py**: Imports from `chira_extract` (parse_intarna_csv, _merge_hybrid_into_chimeras, merge_files, write_interaction_summary); use when `chira_extract.py --hybridize --use_batchtools` times out after submitting IntaRNA jobs to merge loci_seqs.pkl + result.csv per chunk and produce final chimeras.txt, singletons.txt, interactions.txt
 
 ## Notes
 

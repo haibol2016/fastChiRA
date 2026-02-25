@@ -7,7 +7,7 @@ ChiRA is a set of tools to analyze RNA-RNA interactome experimental data such as
 **Note**: fastChiRA is a modified version of ChiRA (based on v1.4.3) with significant performance optimizations and new features. The original code is licensed under GPL v3, and this modified version maintains the same license. All changes are documented in the "Recent Improvements" section below and in [CHANGELOG.md](CHANGELOG.md).
 
 ## Version History
-- **v1.4.13** (Current, 2026-02-21): Batchtools/IntaRNA fixes: wait for all batches (including last), POSIXct-safe job status counting and manual polling in R scripts, CSV line-ending handling in chira_extract
+- **v1.4.13** (Current, 2026-02-21): Batchtools/IntaRNA fixes: wait for all batches (including last), POSIXct-safe job status counting and manual polling in R scripts, CSV line-ending handling in chira_extract; IntaRNA sequences from loci_seqs.pkl (no seq1/seq2 in CSV); merge_intarna_into_chimeras.py for post-IntaRNA merge when main job times out
 - **v1.4.11** (2026-02-17): MPIRE made required dependency for optimal multiprocessing performance, removed fallback code, improved memory efficiency (50-90% reduction) and startup time (2-3x faster)
 - **v1.4.10** (2026-02-15): Fixed batchtools submission issues (template path handling, JSON parsing), ensured all paths are absolute for cluster jobs, and refactored scripts for better code organization
 - **v1.4.9** (2026-02-15): Added `--parallel_chunks` parameter for configurable chunk parallelism in chira_map.py
@@ -198,9 +198,6 @@ If you prefer to install dependencies manually:
   - Purpose: Parsing JSON configuration files for batchtools job submission
   - Install with: `conda install -c conda-forge r-jsonlite` or `install.packages("jsonlite")` in R
   - Note: Usually installed automatically as a dependency of `batchtools`, but explicitly installing ensures compatibility
-- **future** and **future.apply** (required for IntaRNA batchtools; parallel runs within each chunk job)
-  - Install in the **same conda environment as IntaRNA** (the one used via `--batchtools_conda_env`) so cluster workers have them when running the job.
-  - Install with: `conda install -c conda-forge r-future r-future.apply` in that env, or `install.packages(c("future", "future.apply"))` in R.
 - See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md) for detailed usage instructions
 
 **Command-line tools:**
@@ -240,9 +237,9 @@ conda install -c bioconda clan  # Alternative aligner to BWA in chira_map.py
 # Linux: Usually pre-installed
 # macOS: brew install coreutils
 
-# R packages (for batchtools HPC cluster support; add r-future r-future.apply for IntaRNA hybridization)
-conda install -c conda-forge r-batchtools r-jsonlite r-future r-future.apply
-# Or in R: install.packages(c("batchtools", "jsonlite", "future", "future.apply"))
+# R packages (for batchtools HPC cluster support)
+conda install -c conda-forge r-batchtools r-jsonlite
+# Or in R: install.packages(c("batchtools", "jsonlite"))
 ```
 
 For a complete list of dependencies, see [DEPENDENCIES.md](DEPENDENCIES.md).
@@ -790,8 +787,9 @@ chira_quantify.py -b segments.bed -m merged.bed -o output_dir -cs 0.7 -ls 10 -p 
 - `-accw, --acc_width`: IntaRNA --accW: sliding window size for accessibility (default: 150)
 
 **Batchtools (HPC cluster, requires `--hybridize`):**
-- `--use_batchtools`: Submit IntaRNA jobs via R batchtools. Requires R with batchtools and IntaRNA on cluster PATH. See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md).
-- `--keep_batchtools_work`: Keep batchtools work dir after success (default: remove).
+- `--use_batchtools`: Submit IntaRNA jobs via R batchtools. Requires R with batchtools and IntaRNA on cluster PATH. Prepare writes per-chunk `query.fa`, `target.fa`, and `loci_seqs.pkl`; finish loads `loci_seqs.pkl` and `result.csv` per chunk to write chimeras. See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md).
+- If the main job times out after submitting IntaRNA jobs, run **merge_intarna_into_chimeras.py** (required: `--outdir`, `--sample-name`, `--n-chunks`) after all IntaRNA jobs complete to merge results and produce chimeras.txt, singletons.txt, and interactions.txt.
+- `--remove_intermediate`: Remove intermediate files after success (loci.fa.<n>, loci.bed.<n>, batchtools_work/, *.chimeras.<n>, chimeras-r.<n>, singletons.<n>). Default: keep them.
 - `--batchtools_registry`: Registry directory (default: `<outdir>/batchtools_work/registry`).
 - `--batchtools_template`: LSF template path or `"lsf-simple"` (default: lsf_custom.tmpl if present).
 - `--batchtools_queue`: LSF queue (default: long).
@@ -800,14 +798,12 @@ chira_quantify.py -b segments.bed -m merged.bed -o output_dir -cs 0.7 -ls 10 -p 
 - `--batchtools_walltime`: Walltime per job (default: 48:00).
 - `--batchtools_conda_env`: Conda environment for cluster jobs (optional).
 - `--batchtools_max_parallel`: Max concurrent batchtools jobs (default: None = all chunks at once for minimum walltime).
-- `--batchtools_poll_interval`: Seconds between job-status polls (default: 120). Lower (e.g. 60) notices completion sooner; higher reduces scheduler load.
 
 **Command-line settings to finish sooner / shorten walltime:**
 
 - **Skip steps you don't need:** Omit `-r` / `--hybridize` to skip IntaRNA; omit `-s` / `--summarize` if you don't need the interactions file.
 - **Submit all IntaRNA jobs at once:** Leave `--batchtools_max_parallel` unset (default) so all chunk jobs are submitted together and run in parallel. Set it only to limit concurrent jobs (e.g. for queue policy).
 - **More chunks and parallelism:** Use higher `-p` (e.g. `-p 16` or `-p 32`) so you have more IntaRNA chunk jobs; with default max_parallel they all run concurrently. Use `--batchtools_cores 8` (or higher) so each chunk runs many IntaRNA pairs in parallel within the job; or `--batchtools_cores 1` to run more jobs at once (one core per job).
-- **Faster completion detection:** Use `--batchtools_poll_interval 60` so the script notices when jobs finish sooner (at the cost of more frequent status checks).
 - **Less work (filter earlier):** Raise `-tc` or `-sc` to drop low-TPM/low-score alignments; fewer chimeras and less IntaRNA.
 - **Faster IntaRNA:** Keep `-acc N` and `-m H` (defaults). Merge step uses extra sort threads when available to shorten merge time.
 
@@ -815,7 +811,7 @@ chira_quantify.py -b segments.bed -m merged.bed -o output_dir -cs 0.7 -ls 10 -p 
 ```bash
 chira_extract.py -l loci.counts -o out -n mysample -f1 ref.fa -g ref.gtf -f ref_genome.fa \
   -p 32 -tc 0.2 -sc 0.1 -r --use_batchtools \
-  --batchtools_cores 1 --batchtools_poll_interval 60
+  --batchtools_cores 8 --batchtools_memory 8GB 
 ```
 (Default: all 32 chunk jobs submitted at once. Use `-tc` / `-sc` only if you accept dropping some low-TPM/low-score chimeras.)
 
@@ -832,7 +828,7 @@ chira_extract.py -l loci.counts -o out -n mysample -f1 ref.fa -g ref.gtf -p 8
 
 **Header line (35 columns when using hybridization):**
 ```
-read_id	transcript_id_1	transcript_id_2	gene_id_1	gene_id_2	gene_symbol_1	gene_symbol_2	annotation_region_1	annotation_region_2	transcript_start_1	transcript_end_1	transcript_strand_1	transcript_length_1	transcript_start_2	transcript_end_2	transcript_strand_2	transcript_length_2	read_alignment_info	genomic_coordinates_1	genomic_coordinates_2	locus_id_1	locus_id_2	crl_group_id_1	crl_group_id_2	tpm_1	tpm_2	alignment_score_1	alignment_score_2	combined_alignment_score	hybridized_sequences	hybridization_structure	hybridization_positions	hybridization_mfe_kcal_mol	mirna_read_position	hybridization_ends
+read_id	transcript_id_1	transcript_id_2	gene_id_1	gene_id_2	gene_symbol_1	gene_symbol_2	annotation_region_1	annotation_region_2	transcript_start_1	transcript_end_1	transcript_strand_1	transcript_length_1	transcript_start_2	transcript_end_2	transcript_strand_2	transcript_length_2	read_alignment_info	genomic_coordinates_1	genomic_coordinates_2	locus_id_1	locus_id_2	crl_group_id_1	crl_group_id_2	tpm_1	tpm_2	alignment_score_1	alignment_score_2	combined_alignment_score	hybridized_sequences	hybridization_structure	hybridization_positions	hybridization_mfe_kcal_mol	mirna_read_position	hybridized_subsequences
 ```
 
 **Column descriptions:**
@@ -854,7 +850,7 @@ read_id	transcript_id_1	transcript_id_2	gene_id_1	gene_id_2	gene_symbol_1	gene_s
 - `hybridization_positions`: Hybridization position information or `NA`
 - `hybridization_mfe_kcal_mol`: Minimum free energy (kcal/mol) or `NA`
 - `mirna_read_position`: `miRNA_first` (5' miRNA → target 3'), `miRNA_last` (5' target → miRNA 3'), or `NA`
-- `hybridization_ends`: Hybridization end positions or `NA`
+- `hybridized_subsequences`: Hybridized subsequence segments from IntaRNA (format: `subseq1&subseq2`, or `NA`)
 
 **Note on chimeric read orientation:**
 The tool detects chimeric reads in both orientations:
@@ -879,7 +875,7 @@ In the **interactions file**, both orientations are merged into a single entry; 
 
 **2. `{sample_name}.singletons.txt`** (or `.txt.gz` if `--gzip` is used) - Tabular file with singleton reads (non-chimeric alignments).
 
-Header columns (14 total, tab-separated):
+Header columns (15 total, tab-separated):
 - `read_id`: Read identifier
 - `transcript_id`: Transcript ID
 - `gene_id`: Gene ID
@@ -889,14 +885,14 @@ Header columns (14 total, tab-separated):
 - `transcript_length`: Alignment length
 - `read_alignment_info`: Read alignment information
 - `genomic_coordinates`: Genomic coordinates (if GTF provided)
-- `locus_icrl_group_id`: Locus identifier and CRL group ID (format `chr:start:end:strand` and group ID)
+- `locus_id`: Locus identifier (format `chr:start:end:strand`)
+- `crl_group_id`: CRL group ID
 - `tpm`: TPM value
 - `alignment_score`: Alignment score
 
 **3. `{sample_name}.interactions.txt`** - Tabular file with detected interactions (if `--summarize` used). This file is always uncompressed for compatibility with downstream analysis tools.
 
-Header columns (29 total, tab-separated):
-- `read_id`: Read identifier
+Header columns (28 total, tab-separated):
 - `supporting_read_count`: Number of reads supporting this interaction
 - `locus_1_chromosome`, `locus_1_start`, `locus_1_end`, `locus_1_strand`: Genomic coordinates for locus 1
 - `locus_2_chromosome`, `locus_2_start`, `locus_2_end`, `locus_2_strand`: Genomic coordinates for locus 2
@@ -929,7 +925,22 @@ chira_extract.py -l loci.txt -o output_dir -f1 ref1.fasta -n sample1 \
 
 ## Utility Scripts
 
-The following utility scripts are provided to help prepare reference files and annotations for ChiRA analysis. The script `process_chunk_batchtools.py` is invoked internally by the batchtools R workflow for `chira_map.py` (when using `--use_batchtools`); it is not intended to be run directly by users.
+The following utility scripts are provided to help prepare reference files and annotations for ChiRA analysis. The scripts `process_chunk_batchtools.py` and `process_intarna_chunk_batchtools.py` are invoked internally by the batchtools R workflows and are not intended to be run directly by users.
+
+### merge_intarna_into_chimeras.py
+
+**Description:** Standalone script to merge IntaRNA results into chimeras and produce final sample-level chimeras, singletons, and interactions files. Use this when `chira_extract.py --hybridize --use_batchtools` times out after submitting IntaRNA jobs but before the finish phase (e.g. LSF walltime limit). After all IntaRNA chunk jobs have completed, run this script to: (1) merge each chunk’s `loci_seqs.pkl` and `result.csv` into `*.chimeras-r.<n>`, (2) merge `*.chimeras-r.<n>` → `{sample_name}.chimeras.txt`, (3) merge `*.singletons.<n>` → `{sample_name}.singletons.txt`, (4) generate `{sample_name}.interactions.txt`.
+
+**Required Arguments:** `--outdir`, `--sample-name`, `--n-chunks` (number of chunks, 0..N-1).
+
+**Optional Arguments:** `--chunk-root` (default: `outdir/batchtools_work`), `--remove-input` (remove `*.chimeras.<n>` after writing `*.chimeras-r.<n>`), `--buffer-size`.
+
+**Usage Example:**
+```bash
+python merge_intarna_into_chimeras.py --outdir /path/to/extract_output --sample-name mysample --n-chunks 32
+```
+
+**Dependencies:** Imports from `chira_extract` (parse_intarna_csv, _merge_hybrid_into_chimeras, merge_files, write_interaction_summary). Chunk directories must contain `loci_seqs.pkl` and `result.csv`; `*.chimeras.<n>` and `*.singletons.<n>` must exist under `outdir`.
 
 
 ### download_ensembl.py

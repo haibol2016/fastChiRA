@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.4.13] - 2026-02-22
 
+### Added
+- **merge_intarna_into_chimeras.py**: Standalone script to merge IntaRNA results into chimeras and produce final `{sample_name}.chimeras.txt`, `{sample_name}.singletons.txt`, and `{sample_name}.interactions.txt`. Use when `chira_extract.py --hybridize --use_batchtools` times out after submitting IntaRNA jobs: run after all IntaRNA chunk jobs complete, with required `--outdir`, `--sample-name`, `--n-chunks`. Processes all chunks (merge `loci_seqs.pkl` + `result.csv` → `*.chimeras-r.<n>`), then merges chimeras-r and singletons and writes interactions.
+
 ### Fixed
 - **submit_intarna_batchtools.R**: Wait for all batches (including the last) so the main job does not finish while IntaRNA jobs are still running. Replaced `waitForJobs()` with manual polling using `getJobTable()` and status counting to avoid `'sum' not defined for "POSIXt" objects` when batchtools returns POSIXct for done/running/error.
 - **submit_chunks_batchtools.R**: Same POSIXct-safe status counting (`count_status()`) and manual polling instead of `waitForJobs()` when waiting between batches.
@@ -15,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **submit_intarna_batchtools.R**, **submit_chunks_batchtools.R**: Added `count_status()` helper: for POSIXct/POSIXt columns count non-NA; otherwise sum logical. All job status counts use this helper. Wait logic uses a repeat loop with `getJobTable()` and `Sys.sleep(30)` instead of `waitForJobs()`.
+- **chira_extract.py** (IntaRNA/batchtools): IntaRNA CSV no longer requests or parses seq1/seq2; full sequences are taken from `loci_seqs.pkl` (written in prepare, loaded in finish). Dot-bracket in interactions follows IntaRNA convention (id1 = '(', id2 = ')') without swapping. `_merge_hybrid_into_chimeras` always uses `d_loci_seqs` for seq1/seq2.
 
 ## [1.4.12] - 2026-02-20
 
