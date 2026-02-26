@@ -7,98 +7,50 @@ ChiRA is a set of tools to analyze RNA-RNA interactome experimental data such as
 **Note**: fastChiRA is a modified version of ChiRA (based on v1.4.3) with significant performance optimizations and new features. The original code is licensed under GPL v3, and this modified version maintains the same license. All changes are documented in the "Recent Improvements" section below and in [CHANGELOG.md](CHANGELOG.md).
 
 ## Version History
-- **v1.4.14** (Current, 2026-02-21): Version bump; documentation updates (final table column names, CLI args, future/future.apply removed)
-- **v1.4.13** (2026-02-21): Batchtools/IntaRNA fixes: wait for all batches (including last), POSIXct-safe job status counting and manual polling in R scripts, CSV line-ending handling in chira_extract; IntaRNA sequences from loci_seqs.pkl (no seq1/seq2 in CSV); merge_intarna_into_chimeras.py for post-IntaRNA merge when main job times out
-- **v1.4.11** (2026-02-17): MPIRE made required dependency for optimal multiprocessing performance, removed fallback code, improved memory efficiency (50-90% reduction) and startup time (2-3x faster)
-- **v1.4.10** (2026-02-15): Fixed batchtools submission issues (template path handling, JSON parsing), ensured all paths are absolute for cluster jobs, and refactored scripts for better code organization
-- **v1.4.9** (2026-02-15): Added `--parallel_chunks` parameter for configurable chunk parallelism in chira_map.py
-- **v1.4.8** (2026-02-15): Improved chunk-based parallelization for very large transcript counts (e.g., human genome with 387K+ transcripts), variable naming consistency improvements, and bug fixes in chira_merge.py
-- **v1.4.7** (2026-02-15): New utility scripts (extract_transcripts_from_genome.py), U→T conversion in download_mirbase_mature.py, gffread support, and removal of deprecated scripts
-- **v1.4.6** (2026-02-15): Multiprocessing improvements, adaptive I/O buffer sizing, FASTA chunking, I/O bottleneck detection, and code refactoring
-- **v1.4.5** (2026-02-02): Parallel computing support, I/O optimizations, automatic memory management, and enhanced performance
-- **v1.4.4** (2026-01-26): Performance optimizations, BEDTools compatibility, sample name support, comprehensive bug fixes, and new utility scripts
-- **v1.4.3** (Previous): Original version from GitHub (https://github.com/pavanvidem/chira)
+- **v1.4.14** (Current, 2026-02-25): Documentation: output table column names aligned with code; chira_extract batchtools args (`--remove_intermediate`; removed `--keep_batchtools_work`, `--batchtools_poll_interval`); R packages `future`/`future.apply` no longer required.
+- **v1.4.13** (2026-02-22): **merge_intarna_into_chimeras.py** for post-IntaRNA merge when main job times out. R scripts: POSIXct-safe `count_status()` and manual polling (no `waitForJobs`). chira_extract: CSV line endings (`splitlines()`), seq1/seq2 from `loci_seqs.pkl`, dot-bracket id1/id2 convention.
+- **v1.4.12** (2026-02-20): **chira_extract.py**: `gene_name_1` and `gene_name_2` columns added to `{sample_name}.interactions.txt`; reversal handling for `interaction_otherway`.
+- **v1.4.11** (2026-02-17): MPIRE required; CRL ID validation and EM return fix (chira_quantify), stranded alignment filter fix (chira_map), loci.counts indices and single `hybridization_genomic_coordinates` column (chira_extract).
+- **v1.4.10** (2026-02-15): Batchtools paths absolute, JSON parsing fixes; `parse_arguments()` refactor across scripts.
+- **v1.4.9** (2026-02-15): `--parallel_chunks` in chira_map.py (default 2); CPU guidance fix.
+- **v1.4.8** (2026-02-15): chira_merge chunk parallelization (transcript naming), empty-file fix.
+- **v1.4.7** (2026-02-15): **extract_transcripts_from_genome.py** (gffread); U→T in download_mirbase_mature; GFF3 in concatenate_gtf. Removed remove_mirna_hairpin_from_fasta, concatenate_fasta.
+- **v1.4.6** (2026-02-15): Adaptive buffers (8–16MB), `--chunk_fasta`, I/O detection (chira_map); chira_merge re-parallelized; ProcessPoolExecutor; `-p`/`--processes`.
+- **v1.4.5** (2026-02-02): Multi-threading (chira_quantify, chira_merge); 2MB I/O buffers; GNU sort parallel; chira_map memory/sort.
+- **v1.4.4** (2026-01-26): Performance (3–10x chira_quantify, 2–5x collapse/EM); sample_name, gzip, BEDTools detection; utility scripts; Docker/Singularity.
+- **v1.4.3** (Previous): Original from GitHub (https://github.com/pavanvidem/chira).
 
-See [CHANGELOG.md](CHANGELOG.md) for detailed change history.
+See [CHANGELOG.md](CHANGELOG.md) for full change history.
 
 ## Recent Improvements
 
-### v1.4.11 (2026-02-17) - MPIRE Required & Critical Bug Fixes
+### v1.4.14 (2026-02-25)
+- Docs: chimeras/singletons/interactions column names and counts match code; chira_extract batchtools options corrected; R `future`/`future.apply` removed from requirements.
 
-**Critical Bug Fixes:**
-- Fixed CRL ID validation and EM algorithm return bugs in `chira_quantify.py`
-- Fixed alternate alignment filtering for stranded RNA-seq in `chira_map.py`
-- Fixed field index mismatches and MPIRE argument passing in `chira_extract.py`
-- Collapsed 8 separate `hybridization_genomic_coordinates` columns into a single column
+### v1.4.13 (2026-02-22)
+- **merge_intarna_into_chimeras.py**: Standalone script when `chira_extract --hybridize --use_batchtools` times out; merges `loci_seqs.pkl` + `result.csv` per chunk, then chimeras-r/singletons/interactions.
+- R: `count_status()` for POSIXct-safe job status; manual polling instead of `waitForJobs()`.
+- chira_extract: CSV `splitlines()`, `;`/`,` separators; IntaRNA sequences from `loci_seqs.pkl`; dot-bracket id1/id2; `_merge_hybrid_into_chimeras` uses `d_loci_seqs`.
 
-**Multiprocessing:**
-- **MPIRE is now required** (moved from optional to `install_requires`)
-- All parallel processing uses MPIRE WorkerPool with shared objects
-- Added `start_method='fork'` for copy-on-write semantics (50-90% memory reduction)
-- Benefits: 50-90% memory reduction, 2-3x faster startup
+### v1.4.12 (2026-02-20)
+- **chira_extract.py**: `gene_name_1`, `gene_name_2` in interactions.txt; swap on `interaction_otherway`.
 
-### v1.4.7-1.4.10 (2026-02-15) - Utility Scripts, Code Refactoring & Batchtools
+### v1.4.11 (2026-02-17)
+- **Fixes:** chira_quantify (CRL ID validation, EM return); chira_map (stranded filter); chira_extract (loci.counts indices, MPIRE args, single hybridization_genomic_coordinates column).
+- **MPIRE required:** WorkerPool, `start_method='fork'`; 50–90% memory reduction, 2–3x startup.
 
-**New Features:**
-- **extract_transcripts_from_genome.py**: New utility script using gffread (replaces `remove_mirna_hairpin_from_fasta.py`)
-- **download_mirbase_mature.py**: Added automatic U→T conversion for ChiRA compatibility
-- **chira_map.py**: Added `--parallel_chunks` parameter and FASTA chunking support
-- **Batchtools support**: Enhanced HPC cluster job submission with absolute path handling
+### v1.4.7–v1.4.10 (2026-02-15)
+- **1.4.10:** Batchtools absolute paths, JSON fixes; script refactor.
+- **1.4.9:** `--parallel_chunks`; CPU display fix.
+- **1.4.8:** chira_merge chunk parallelization, empty-file fix.
+- **1.4.7:** extract_transcripts_from_genome.py, U→T, GFF3; removed remove_mirna_hairpin_from_fasta, concatenate_fasta.
 
-**Code Improvements:**
-- All scripts refactored for better code organization (modular functions, consistent structure)
-- Improved chunk-based parallelization for very large datasets (e.g., 387K+ transcripts)
+### v1.4.4–v1.4.6
+- **1.4.6:** Adaptive buffers, `--chunk_fasta`, ProcessPoolExecutor, chira_merge `-p`.
+- **1.4.5:** Multi-threading, 2MB buffers, GNU sort parallel.
+- **1.4.4:** 3–10x quantify, sample_name/gzip/BEDTools, utilities, Docker/Singularity.
 
-### v1.4.6 (2026-02-15) - Multiprocessing Evolution & I/O Optimizations
-
-**Multiprocessing Evolution:**
-- ThreadPoolExecutor → ProcessPoolExecutor → MPIRE (bypasses GIL, 2-8x faster)
-- Adaptive buffer sizing (8-16MB, 10-50x I/O improvement for large files)
-- FASTA chunking support in `chira_map.py` for better memory efficiency
-- Progress tracking for large BAM files (reports every 1M reads)
-
-### v1.4.5 (2026-02-02) - Parallel Computing Introduction
-
-**Initial Parallel Computing:**
-- Multi-threading support in `chira_quantify.py` and `chira_merge.py` (2-4x faster)
-- Enhanced multi-threading for external tools (samtools, pysam) in `chira_map.py`
-- GNU sort parallel support (2-4x faster sorting)
-- I/O optimizations with 2MB buffers (20-40% faster)
-
-### v1.4.4 (2026-01-26) - Performance Optimizations
-
-**Performance Improvements:**
-- **3-10x faster** overall processing, especially in `chira_quantify.py`
-- **2-5x faster** FASTQ parsing in `chira_collapse.py` (removed Biopython dependency)
-- **2-5x faster** CIGAR string parsing with pre-compiled regex patterns
-- **20-40% faster** BAM file processing in `chira_map.py`
-- **10-50x faster** EM algorithm with optimized memory operations
-
-**New Features:**
-- Added `--sample_name` parameter to `chira_extract.py` for customizable output file names
-- Output files now use format: `{sample_name}.chimeras.txt`, `{sample_name}.singletons.txt`, `{sample_name}.interactions.txt`
-- Added `--gzip` option to `chira_extract.py` for compressing large output files (saves disk space, faster I/O for large files)
-- Added header rows to interactions output file with column descriptions
-- Added `mirna_position` column to chimeras output indicating read orientation (miRNA_first or miRNA_last)
-- Automatic BEDTools version detection - works with both old and new command formats
-- New utility scripts for reference file preparation (see Utility Scripts section)
-- Docker support with pre-installed dependencies (see Docker Support section)
-- Singularity/Apptainer support - see [SINGULARITY_SETUP.md](SINGULARITY_SETUP.md) for detailed instructions
-
-**Compatibility:**
-- BEDTools: Automatically supports both `intersectBed`/`fastaFromBed` (old) and `bedtools intersect`/`bedtools getfasta` (new)
-- No code changes needed when switching between BEDTools versions
-
-**Bug Fixes:**
-- **chira_map.py**: Fixed first iteration bug that wrote empty string to unmapped FASTA file
-- **chira_merge.py**: Added zero-length match checks to prevent division by zero errors
-- **chira_extract.py**: Fixed multiple bugs including undefined variables, logic errors in strand/chromosome checks, index out-of-bounds in TPM cutoff, and string slicing issues
-- **chira_utilities.py**: Fixed `median()` function bug where input wasn't sorted; improved `get_bedtools_command()` to verify command success
-- **chira_quantify.py**: Fixed CRL iteration bug that skipped index 0
-- Improved file handling with proper context managers throughout
-- Fixed BEDTools command compatibility across versions with automatic detection
-
-For complete details with line-by-line changes, please refer to [CHANGELOG.md](CHANGELOG.md).
+For line-by-line details see [CHANGELOG.md](CHANGELOG.md).
 
 ## Installation
 
@@ -142,6 +94,11 @@ The Docker image includes:
 - **Environment setup**: Proper PATH and PYTHONPATH configuration
 
 **Note:** Optional tools (blockbuster, clan) are not included in the Docker image by default but can be added if needed for specific use cases.
+
+**Note:** Alternatively, you can build the image from the provided Dockerfile:
+```bash
+docker build -t chiraplus:v0.0.2 .
+```
 
 ### Running ChiRA in Docker
 
@@ -406,28 +363,6 @@ chira_extract.py -l quantify_output/loci.counts -o extract_output \
 - `sample1.chimeras.txt`: Individual chimeric reads
 - `sample1.singletons.txt`: Non-chimeric reads
 - `sample1.interactions.txt`: Summarized interactions (if `-s` used)
-
----
-
-### Docker Workflow
-
-If using Docker, the workflow is similar but commands are prefixed with `docker run`. Use the pre-built image using the **Dockerfile**:
-
-```bash
-# Pull the pre-built image (first time only)
-docker pull docker.io/nemat1976/chiraplus:v0.0.1
-
-# Run each step with volume mounts
-docker run --rm -v $(pwd)/data:/app/data -v $(pwd)/output:/app/output \
-  docker.io/nemat1976/chiraplus:v0.0.1 chira_collapse.py -i data/input.fastq -o output/collapsed.fasta
-
-# ... continue with remaining steps
-```
-
-**Note:** Alternatively, you can build the image from the provided Dockerfile:
-```bash
-docker build -t chira:latest .
-```
 
 ---
 
