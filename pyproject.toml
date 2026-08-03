@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chira"
+dynamic = ["version"]
+description = "Chimeric Read Analyzer - Tools for analyzing RNA-RNA interactome data"
+readme = "README.md"
+requires-python = ">=3.6"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "ChiRA Contributors" }]
+keywords = ["bioinformatics", "RNA", "chimeric", "CLASH", "CLIP"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "biopython",
+    "bcbio-gff",
+    "pysam",
+    "mpire>=2.4.0",
+]
+
+[project.optional-dependencies]
+optional = [
+    "psutil",
+    "requests",
+    "pyliftover",
+]
+
+[project.urls]
+Homepage = "https://github.com/haibol2016/chira"
+
+[project.scripts]
+"chira_collapse.py" = "chira.collapse:main"
+"chira_map.py" = "chira.map:main"
+"chira_merge.py" = "chira.merge:main"
+"chira_quantify.py" = "chira.quantify:main"
+"chira_extract.py" = "chira.extract:main"
+"concatenate_gtf.py" = "chira.utils.concatenate_gtf:main"
+"download_ensembl.py" = "chira.utils.download_ensembl:main"
+"download_mirbase_gff3.py" = "chira.utils.download_mirbase_gff3:main"
+"download_mirbase_mature.py" = "chira.utils.download_mirbase_mature:main"
+"extract_transcripts_from_genome.py" = "chira.utils.extract_transcripts_from_genome:main"
+"remove_mirna_hairpin_from_gtf.py" = "chira.utils.remove_mirna_hairpin_from_gtf:main"
+"process_chunk_batchtools.py" = "chira.batchtools.process_chunk:main"
+"process_intarna_chunk_batchtools.py" = "chira.batchtools.process_intarna_chunk:main"
+"merge_intarna_into_chimeras.py" = "chira.batchtools.merge_intarna:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "chira.utilities.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+chira = ["share/*.R", "share/*.tmpl"]

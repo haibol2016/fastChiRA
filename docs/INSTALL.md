@@ -27,10 +27,12 @@ conda install -c conda-forge r-base r-batchtools r-jsonlite  # Only if using --u
 
 ### Step 3: Install ChiRA Package
 
+ChiRA uses a standard `src/` layout (`src/chira/`). Install from the repository root:
+
 #### Option A: Install from Source (Recommended for Development)
 
 ```bash
-# Navigate to ChiRA directory
+# Navigate to ChiRA repository root (contains pyproject.toml)
 cd /path/to/chira
 
 # Install in editable mode (allows code modifications)
@@ -222,7 +224,7 @@ chira_map.py --aligner bwa \
 
 5. **Scripts location**: After `pip install -e .`, scripts are in your PATH:
    - `chira_map.py` - Direct command (recommended)
-   - `python -m chira_map` - Alternative method
+   - `python -m chira.map` - Alternative method
    - Full path not needed if installed
 
 See `EXAMPLE_bsub_JOB.sh` for a complete working example.

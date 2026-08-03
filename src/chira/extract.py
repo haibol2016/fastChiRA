@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import chira_utilities
+from chira import utilities as chira_utilities
 import argparse
 import os
 import sys
@@ -1111,7 +1111,7 @@ def run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, inta
         return
 
     reg_dir = os.path.abspath(batchtools_registry)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    share_dir = os.path.dirname(chira_utilities.share_path("lsf_custom.tmpl"))
     os.makedirs(reg_dir, exist_ok=True)
 
     # Resource defaults (match chira_map.py)
@@ -1143,18 +1143,19 @@ def run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, inta
         pass
     elif template_file:
         if not os.path.isabs(template_file):
-            template_file = os.path.join(script_dir, template_file)
+            template_file = os.path.join(share_dir, template_file)
         template_file = os.path.abspath(template_file)
         if not os.path.exists(template_file):
             print(f"WARNING: Template not found: {template_file}. Using 'lsf-simple'.", file=sys.stderr)
             template_file = "lsf-simple"
     else:
-        default_tmpl = os.path.join(script_dir, "lsf_custom.tmpl")
+        default_tmpl = chira_utilities.share_path("lsf_custom.tmpl")
         template_file = default_tmpl if os.path.exists(default_tmpl) else "lsf-simple"
     if template_file != "lsf-simple":
         template_file = os.path.abspath(template_file)
 
-    python_script = os.path.abspath(os.path.join(script_dir, "process_intarna_chunk_batchtools.py"))
+    from chira.batchtools import process_intarna_chunk as _process_intarna_mod
+    python_script = os.path.abspath(_process_intarna_mod.__file__)
     if not os.path.exists(python_script):
         raise FileNotFoundError(f"Python worker script not found: {python_script}")
 
@@ -1180,13 +1181,13 @@ def run_batchtools_r_script(args, batchtools_work_dir, batchtools_registry, inta
     with open(chunks_file, 'w', encoding='utf-8') as f:
         json.dump(chunks_data, f, indent=2, ensure_ascii=False)
 
-    r_script = os.path.join(script_dir, "submit_intarna_batchtools.R")
+    r_script = chira_utilities.share_path("submit_intarna_batchtools.R")
     if not os.path.exists(r_script):
         raise FileNotFoundError(f"R script not found: {r_script}")
 
     cmd = ["Rscript", r_script, os.path.abspath(config_file), os.path.abspath(chunks_file)]
     print("Submitting IntaRNA jobs via batchtools (chira_map pattern): " + " ".join(cmd), file=sys.stderr)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=86400, cwd=script_dir)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=86400, cwd=share_dir)
     if result.returncode != 0:
         sys.stderr.write(result.stderr or "")
         raise RuntimeError(f"batchtools R script failed with code {result.returncode}. stderr: {result.stderr!r}")

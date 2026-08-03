@@ -3,7 +3,7 @@ import os
 import sys
 from collections import defaultdict
 import argparse
-import chira_utilities
+from chira import utilities as chira_utilities
 import copy
 # ProcessPoolExecutor no longer needed - MPIRE is required
 import math

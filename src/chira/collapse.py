@@ -2,7 +2,7 @@
 from collections import defaultdict
 import argparse
 import gzip
-import chira_utilities
+from chira import utilities as chira_utilities
 
 # Note: Bio.SeqIO is no longer used - raw file parsing is faster for large files
 

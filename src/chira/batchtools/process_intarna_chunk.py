@@ -10,10 +10,6 @@ import sys
 import subprocess
 import shlex
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
-
 def process_chunk_standalone(chunk_dir, intarna_params, ncpus, conda_env=None):
     """
     Process one IntaRNA chunk: run IntaRNA once with -q query.fa -t target.fa --outPairwise

@@ -5,7 +5,7 @@ import sys
 import subprocess
 import shutil
 import pysam
-import chira_utilities
+from chira import utilities as chira_utilities
 import multiprocessing
 import time
 import json
@@ -695,8 +695,8 @@ def submit_chunks_with_batchtools(args, chunk_files, chunk_dir, alignment_job_ty
         
         # Prepare configuration
         max_parallel = args.batchtools_max_parallel if args.batchtools_max_parallel else len(chunks_data)
-        # Default to lsf_custom.tmpl in the same directory as chira_map.py
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Default to packaged lsf_custom.tmpl (chira/share/)
+        share_dir = os.path.dirname(chira_utilities.share_path("lsf_custom.tmpl"))
         if hasattr(args, 'batchtools_template') and args.batchtools_template:
             template_file = args.batchtools_template
             # Handle special case: "lsf-simple" is a built-in template name, not a file path
@@ -704,9 +704,9 @@ def submit_chunks_with_batchtools(args, chunk_files, chunk_dir, alignment_job_ty
                 # Keep as-is, R script will handle it
                 pass
             else:
-                # Resolve relative paths to absolute paths (relative to script directory)
+                # Resolve relative paths to absolute paths (relative to share directory)
                 if not os.path.isabs(template_file):
-                    template_file = os.path.join(script_dir, template_file)
+                    template_file = os.path.join(share_dir, template_file)
                 # Normalize the path
                 template_file = os.path.abspath(template_file)
                 # Check if file exists
@@ -714,14 +714,15 @@ def submit_chunks_with_batchtools(args, chunk_files, chunk_dir, alignment_job_ty
                     print(f"WARNING: Template file not found: {template_file}. Using built-in 'lsf-simple' template.", file=sys.stderr)
                     template_file = "lsf-simple"
         else:
-            # Default: use lsf_custom.tmpl in the ChiRA directory
-            default_template = os.path.join(script_dir, "lsf_custom.tmpl")
+            # Default: use packaged lsf_custom.tmpl
+            default_template = chira_utilities.share_path("lsf_custom.tmpl")
             if os.path.exists(default_template):
                 template_file = default_template
             else:
                 # Fallback to built-in if custom template not found
                 template_file = "lsf-simple"
                 print(f"WARNING: lsf_custom.tmpl not found at {default_template}. Using built-in 'lsf-simple' template.", file=sys.stderr)
+        from chira.batchtools import process_chunk as _process_chunk_mod
         config = {
             "reg_dir": reg_dir,
             "queue": args.batchtools_queue,
@@ -729,7 +730,7 @@ def submit_chunks_with_batchtools(args, chunk_files, chunk_dir, alignment_job_ty
             "memory_per_job": memory_per_job,
             "walltime": args.batchtools_walltime,
             "conda_env": conda_env,
-            "python_script": os.path.abspath(os.path.join(os.path.dirname(__file__), "process_chunk_batchtools.py")),
+            "python_script": os.path.abspath(_process_chunk_mod.__file__),
             "chunk_dir": chunk_dir,
             "alignment_job_types_json": json.dumps(alignment_job_types_list),
             "per_chunk_processes": per_chunk_processes,
@@ -770,8 +771,8 @@ def submit_chunks_with_batchtools(args, chunk_files, chunk_dir, alignment_job_ty
             print(f"      chunks_file: {chunks_file}", file=sys.stderr)
             return None, None
         
-        # Get path to R script
-        r_script = os.path.abspath(os.path.join(os.path.dirname(__file__), "submit_chunks_batchtools.R"))
+        # Get path to packaged R script
+        r_script = chira_utilities.share_path("submit_chunks_batchtools.R")
         if not os.path.exists(r_script):
             print(f"ERROR: R script not found: {r_script}", file=sys.stderr)
             return None, None
@@ -1928,7 +1929,7 @@ Auto-calculation: cores × 0.5GB total (e.g., 8 cores → 4GB total → 0.5GB pe
 
     parser.add_argument('--batchtools_template', action='store', type=str, default=None, metavar='',
                         dest='batchtools_template',
-                        help='''Path to LSF template file for batchtools (default: lsf_custom.tmpl in ChiRA directory).
+                        help='''Path to LSF template file for batchtools (default: packaged lsf_custom.tmpl).
                                 The default template (lsf_custom.tmpl) is based on proven InPAS implementation.
                                 Specify a different template only if you need custom LSF directives or module loads.
                                 To use built-in "lsf-simple": set to "lsf-simple" (not recommended).''')

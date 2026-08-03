@@ -6,6 +6,7 @@ This module contains shared utility functions and constants used across ChiRA sc
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -14,6 +15,14 @@ from datetime import datetime
 
 # Version number - single source of truth for all ChiRA scripts
 __version__ = "1.4.14"
+
+# Directory containing R scripts and LSF templates shipped with the package
+_SHARE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "share")
+
+
+def share_path(filename):
+    """Return absolute path to a file in the package share/ directory."""
+    return os.path.join(_SHARE_DIR, filename)
 
 
 def _enable_unbuffered_stdout_stderr():

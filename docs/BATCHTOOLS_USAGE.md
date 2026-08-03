@@ -83,7 +83,7 @@ python chira_map.py \
   - Example: `--batchtools_max_parallel 2` → only 2 jobs run at a time, others wait
   - Useful if cluster has job limits per user
 - `--batchtools_conda_env`: Conda environment path (default: auto-detect from `CONDA_DEFAULT_ENV`)
-- `--batchtools_template`: LSF template file (default: `lsf_custom.tmpl` in ChiRA directory)
+- `--batchtools_template`: LSF template file (default: packaged `lsf_custom.tmpl` in `chira/share/`)
   - Can be an absolute path to a custom template file
   - Can be the built-in `"lsf-simple"` template (not recommended for most use cases)
   - Relative paths are automatically resolved to absolute paths
@@ -348,7 +348,7 @@ nodename = "your-lsf-hostname"
 
 **Important**: Template file paths are automatically converted to absolute paths to ensure cluster jobs can find the template file regardless of working directory.
 
-See `lsf_custom.tmpl` for the default template structure.
+See `lsf_custom.tmpl` (in `src/chira/share/` after install, or packaged with ChiRA) for the default template structure.
 
 ## chira_extract.py Hybridization with Batchtools
 

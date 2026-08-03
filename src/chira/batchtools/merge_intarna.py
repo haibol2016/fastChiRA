@@ -20,12 +20,7 @@ import sys
 import argparse
 import pickle
 
-# Allow importing from same package when run as script
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
-
-from chira_extract import (
+from chira.extract import (
     parse_intarna_csv,
     _merge_hybrid_into_chimeras,
     merge_files,

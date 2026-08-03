@@ -6,11 +6,8 @@ This script is called by batchtools jobs to process one chunk.
 import sys
 import os
 import json
-import chira_utilities
 
-# Import the alignment function from chira_map
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from chira_map import align_with_bwa
+from chira.map import align_with_bwa
 
 
 def process_chunk_standalone(chunk_file, chunk_idx, chunk_dir, 

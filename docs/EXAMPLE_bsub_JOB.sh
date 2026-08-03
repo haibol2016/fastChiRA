@@ -58,7 +58,7 @@ chira_map.py --aligner bwa \
    -s fw -p 8 -co 2
 
 # Alternative Method 2: Use python -m (if scripts not in PATH)
-# python -m chira_map --aligner bwa \
+# python -m chira.map --aligner bwa \
 #    -i ${fasta[$i]} \
 #    -o $out \
 #    --chunk_fasta 10 \

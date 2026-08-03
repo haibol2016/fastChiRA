@@ -54,6 +54,8 @@ For line-by-line details see [CHANGELOG.md](CHANGELOG.md).
 
 ## Installation
 
+For a from-source install (`pip install -e .`), see [docs/INSTALL.md](docs/INSTALL.md). The package uses a standard `src/chira/` layout; CLI names such as `chira_map.py` are unchanged.
+
 ### Recommended: Container Installation
 
 **The easiest way to use ChiRA is with the provided container images**, which include all dependencies pre-installed:
@@ -83,7 +85,7 @@ singularity exec -B $(pwd)/data:/app/data -B $(pwd)/output:/app/output \
  chiraplus_v0.0.2.sif chira_collapse.py -i data/input.fastq -o output/collapsed.fasta
 ```
 
-For detailed Singularity/Apptainer setup and usage instructions, see [SINGULARITY_SETUP.md](SINGULARITY_SETUP.md).
+For detailed Singularity/Apptainer setup and usage instructions, see [docs/SINGULARITY_SETUP.md](docs/SINGULARITY_SETUP.md).
 
 ### Docker Image Contents
 
@@ -156,7 +158,7 @@ If you prefer to install dependencies manually:
   - Purpose: Parsing JSON configuration files for batchtools job submission
   - Install with: `conda install -c conda-forge r-jsonlite` or `install.packages("jsonlite")` in R
   - Note: Usually installed automatically as a dependency of `batchtools`, but explicitly installing ensures compatibility
-- See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md) for detailed usage instructions
+- See [BATCHTOOLS_USAGE.md](docs/BATCHTOOLS_USAGE.md) for detailed usage instructions
 
 **Command-line tools:**
 - bwa (recommended for alignment)
@@ -200,9 +202,9 @@ conda install -c conda-forge r-batchtools r-jsonlite
 # Or in R: install.packages(c("batchtools", "jsonlite"))
 ```
 
-For a complete list of dependencies, see [DEPENDENCIES.md](DEPENDENCIES.md).
+For a complete list of dependencies, see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
 
-For batchtools HPC cluster usage, see [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md).
+For batchtools HPC cluster usage, see [BATCHTOOLS_USAGE.md](docs/BATCHTOOLS_USAGE.md).
 
 ---
 
@@ -511,7 +513,7 @@ A split reference uses two separate reference FASTA files instead of one combine
   - **Benefits**: Submit chunk jobs to cluster scheduler for true parallel processing across cluster nodes
   - **Path handling**: All file paths are automatically converted to absolute paths for cluster job execution
   - **Batchtools options** (when `--use_batchtools` is used): `--batchtools_queue` (default: long), `--batchtools_cores` (default: 8), `--batchtools_memory`, `--batchtools_walltime` (default: 240:00), `--batchtools_max_parallel`, `--batchtools_conda_env`, `--batchtools_template` (default: lsf_custom.tmpl or "lsf-simple")
-  - See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md) for detailed usage and examples
+  - See [BATCHTOOLS_USAGE.md](docs/BATCHTOOLS_USAGE.md) for detailed usage and examples
 
 **Outputs:**
 - `sorted.bam`: Sorted BAM file
@@ -723,7 +725,7 @@ chira_quantify.py -b segments.bed -m merged.bed -o output_dir -cs 0.7 -ls 10 -p 
 - `-accw, --acc_width`: IntaRNA --accW: sliding window size for accessibility (default: 150)
 
 **Batchtools (HPC cluster, requires `--hybridize`):**
-- `--use_batchtools`: Submit IntaRNA jobs via R batchtools. Requires R with batchtools and IntaRNA on cluster PATH. Prepare writes per-chunk `query.fa`, `target.fa`, and `loci_seqs.pkl`; finish loads `loci_seqs.pkl` and `result.csv` per chunk to write chimeras. See [BATCHTOOLS_USAGE.md](BATCHTOOLS_USAGE.md).
+- `--use_batchtools`: Submit IntaRNA jobs via R batchtools. Requires R with batchtools and IntaRNA on cluster PATH. Prepare writes per-chunk `query.fa`, `target.fa`, and `loci_seqs.pkl`; finish loads `loci_seqs.pkl` and `result.csv` per chunk to write chimeras. See [BATCHTOOLS_USAGE.md](docs/BATCHTOOLS_USAGE.md).
 - If the main job times out after submitting IntaRNA jobs, run **merge_intarna_into_chimeras.py** (required: `--outdir`, `--sample-name`, `--n-chunks`) after all IntaRNA jobs complete to merge results and produce chimeras.txt, singletons.txt, and interactions.txt.
 - `--remove_intermediate`: Remove intermediate files after success (loci.fa.<n>, loci.bed.<n>, batchtools_work/, *.chimeras.<n>, chimeras-r.<n>, singletons.<n>). Default: keep them.
 - `--batchtools_registry`: Registry directory (default: `<outdir>/batchtools_work/registry`).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import chira_utilities
+from chira import utilities as chira_utilities
 import argparse
 import os
 import sys
