@@ -4,7 +4,7 @@ Pipeline and utility CLIs for fastChiRA. Install: [install.md](install.md). HPC:
 
 Pipeline order: **collapse → map → merge → quantify → extract**.
 
-**Reference FASTAs (`-f1` / `-f2`):** Use the **same** `-f1, --ref_fasta1` and (when used) `-f2, --ref_fasta2` files at every step that accepts them — typically **map → merge → extract**. Do not swap paths, subsets, or different builds of the same transcriptome between steps; mismatched references break length/context lookups and can corrupt loci, coordinates, and hybridization sequences. If you mapped with only `-f1`, keep using only that file downstream; if you used a split reference (`-f1` targets + `-f2` miRNAs), pass **both** the same way through merge and extract.
+**Reference FASTAs (`-f1` / `-f2`):** Use the **same** `-f1, --ref_fasta1` and (when used) `-f2, --ref_fasta2` files at every step that accepts them — typically **map → merge → extract**. Do not swap paths, subsets, or different builds of the same transcriptome between steps; mismatched references break length/context lookups and can corrupt loci, coordinates, and hybridization sequences. If you mapped with only `-f1`, keep using only that file downstream; if you used a split reference (`-f1` non-miRNAs.fa + `-f2` miRNAs.fa), pass **both** the same way through merge and extract.
 
 ---
 
