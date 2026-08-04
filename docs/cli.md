@@ -4,6 +4,8 @@ Pipeline and utility CLIs for fastChiRA. Install: [install.md](install.md). HPC:
 
 Pipeline order: **collapse → map → merge → quantify → extract**.
 
+**Reference FASTAs (`-f1` / `-f2`):** Use the **same** `-f1, --ref_fasta1` and (when used) `-f2, --ref_fasta2` files at every step that accepts them — typically **map → merge → extract**. Do not swap paths, subsets, or different builds of the same transcriptome between steps; mismatched references break length/context lookups and can corrupt loci, coordinates, and hybridization sequences. If you mapped with only `-f1`, keep using only that file downstream; if you used a split reference (`-f1` targets + `-f2` miRNAs), pass **both** the same way through merge and extract.
+
 ---
 
 ## Pipeline tools
@@ -69,7 +71,7 @@ Plus index/reference as above: `-x1` / `-x2` **or** `-f1` / `-f2` with `-b`.
 | `--sort_memory` | auto | Memory per thread for BAM sort (e.g. `2G`); total ≈ value × processes |
 | `-b, --build` | off | Build indices from `-f1`/`-f2` |
 | `-x1, --index1` / `-x2, --index2` | — | Prebuilt index paths |
-| `-f1, --ref_fasta1` / `-f2, --ref_fasta2` | — | Reference FASTAs (split reference: e.g. targets + miRNAs; convert miRNA U→T) |
+| `-f1, --ref_fasta1` / `-f2, --ref_fasta2` | — | Reference FASTAs (split reference: e.g. targets + miRNAs; convert miRNA U→T). Reuse these **same** paths in merge and extract |
 | `-co, --chimeric_overlap` | `2` | Max bases allowed between chimeric segments |
 | `-v, --version` | — | Print version |
 
@@ -158,7 +160,7 @@ Merge overlapping alignments into read-concentrated loci. With a GTF, convert tr
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-g, --gtf` | — | Annotation GTF/GFF for coordinate conversion |
-| `-f1, --ref_fasta1` / `-f2, --ref_fasta2` | — | Reference FASTAs (lengths / context) |
+| `-f1, --ref_fasta1` / `-f2, --ref_fasta2` | — | Reference FASTAs (lengths / context). Must match the FASTAs used in **map** (and later in **extract**) |
 | `-ao, --alignment_overlap` | `0.7` | Min fraction overlap to merge BED intervals `[0–1]` |
 | `-so, --segment_overlap` | `0.7` | Overlap fraction to merge positions into a segment |
 | `-lt, --length_threshold` | `0.9` | Keep alignments ≥ this fraction of the longest `[0.8–1]` |
@@ -253,7 +255,7 @@ Extract best chimeric (and singleton) alignments per read; optionally run IntaRN
 | `-l, --loci` | Quantify output (e.g. `loci.counts`) |
 | `-o, --out` | Output directory |
 | `-n, --sample_name` | Prefix for output files |
-| `-f1, --ref_fasta1` | First-priority reference FASTA |
+| `-f1, --ref_fasta1` | First-priority reference FASTA (same file as in **map** / **merge**) |
 
 **Conditional:** with `--hybridize` **and** `-g/--gtf`, **`-f/--ref`** (genomic FASTA) is required for IntaRNA accessibility.
 
@@ -262,7 +264,7 @@ Extract best chimeric (and singleton) alignments per read; optionally run IntaRN
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-g, --gtf` | — | Annotation GTF/GFF (miRBase GFF3 OK for mature miRNAs) |
-| `-f2, --ref_fasta2` | — | Second-priority FASTA (e.g. miRNA) |
+| `-f2, --ref_fasta2` | — | Second-priority FASTA (e.g. miRNA); same file as in **map** / **merge** when a split reference was used |
 | `-f, --ref` | — | Genomic FASTA (IntaRNA accessibility when hybridizing with GTF) |
 | `-p, --processes` | `8` | Processes for extraction, hybridization prep/finish, merge |
 | `-tc, --tpm_cutoff` | `0` | Drop transcripts below this TPM percentile `[0, 1)` |
