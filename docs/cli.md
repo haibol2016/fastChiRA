@@ -71,7 +71,7 @@ Plus index/reference as above: `-x1` / `-x2` **or** `-f1` / `-f2` with `-b`.
 | `--sort_memory` | auto | Memory per thread for BAM sort (e.g. `2G`); total ≈ value × processes |
 | `-b, --build` | off | Build indices from `-f1`/`-f2` |
 | `-x1, --index1` / `-x2, --index2` | — | Prebuilt index paths |
-| `-f1, --ref_fasta1` / `-f2, --ref_fasta2` | — | Reference FASTAs (split reference: e.g. targets + miRNAs; convert miRNA U→T). Reuse these **same** paths in merge and extract |
+| `-f1, --ref_fasta1` / `-f2, --ref_fasta2` | — | Reference FASTAs (split reference: e.g. `-f1` non-miRNAs.fa and `-f2` miRNAs.fa; convert miRNA U→T). Reuse these **same** paths in merge and extract |
 | `-co, --chimeric_overlap` | `2` | Max bases allowed between chimeric segments |
 | `-v, --version` | — | Print version |
 
@@ -160,7 +160,7 @@ Merge overlapping alignments into read-concentrated loci. With a GTF, convert tr
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-g, --gtf` | — | Annotation GTF/GFF for coordinate conversion |
-| `-f1, --ref_fasta1` / `-f2, --ref_fasta2` | — | Reference FASTAs (lengths / context). Must match the FASTAs used in **map** (and later in **extract**) |
+| `-f1, --ref_fasta1` / `-f2, --ref_fasta2` | — | Reference FASTAs; must match those used in **map** (and later in **extract**) |
 | `-ao, --alignment_overlap` | `0.7` | Min fraction overlap to merge BED intervals `[0–1]` |
 | `-so, --segment_overlap` | `0.7` | Overlap fraction to merge positions into a segment |
 | `-lt, --length_threshold` | `0.9` | Keep alignments ≥ this fraction of the longest `[0.8–1]` |
