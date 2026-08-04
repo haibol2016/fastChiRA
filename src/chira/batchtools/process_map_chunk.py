@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Standalone script to process a single chunk for batchtools job submission.
-This script is called by batchtools jobs to process one chunk.
+Standalone worker: process one FASTA chunk for chira_map batchtools jobs.
+Called by submit_chunks_batchtools.R (one LSF job per chunk).
 """
 import sys
 import os
@@ -10,12 +10,12 @@ import json
 from chira.map import align_with_bwa
 
 
-def process_chunk_standalone(chunk_file, chunk_idx, chunk_dir, 
-                             alignment_job_types_json, 
-                             per_chunk_processes):
+def process_map_chunk_standalone(chunk_file, chunk_idx, chunk_dir,
+                                 alignment_job_types_json,
+                                 per_chunk_processes):
     """
-    Process a single chunk - standalone version for batchtools.
-    
+    Align one chunk FASTA with BWA for all configured job types.
+
     Args:
         chunk_file: Path to chunk FASTA file
         chunk_idx: Chunk index number
@@ -28,17 +28,16 @@ def process_chunk_standalone(chunk_file, chunk_idx, chunk_dir,
     if not os.path.isdir(chunk_dir):
         raise NotADirectoryError(f"Chunk directory not found: {chunk_dir}")
 
-    # Parse alignment job types from JSON
     alignment_job_types = json.loads(alignment_job_types_json)
 
     chunk_outdir = os.path.join(chunk_dir, f"chunk_{chunk_idx:03d}_out")
     os.makedirs(chunk_outdir, exist_ok=True)
-    
+
     chunk_bams = {}
     for job_type in alignment_job_types:
         (align_type, index_type, refindex, seed_length, align_score,
          match_score, mismatch_score, gap_o, gap_e, n_aligns) = job_type
-        
+
         job_name = f"{index_type}.{align_type}"
         try:
             align_with_bwa(align_type, index_type, chunk_file, refindex, chunk_outdir,
@@ -50,41 +49,46 @@ def process_chunk_standalone(chunk_file, chunk_idx, chunk_dir,
         except Exception as e:
             print(f"ERROR: Chunk {chunk_idx} {job_name} failed: {str(e)}", file=sys.stderr)
             raise
-    
-    # Write completion marker
+
     completion_file = os.path.join(chunk_outdir, "chunk_complete.txt")
     with open(completion_file, 'w') as f:
         f.write(f"Chunk {chunk_idx} completed successfully\n")
-    
+
     return chunk_bams
 
 
 def parse_arguments():
     """
-    Parse command-line arguments for chunk processing.
-    
+    Parse command-line arguments for map chunk processing.
+
     Returns:
         tuple: (chunk_file, chunk_idx, chunk_dir, alignment_job_types_json, per_chunk_processes)
     """
     if len(sys.argv) != 6:
-        print("Usage: process_chunk_batchtools.py <chunk_file> <chunk_idx> <chunk_dir> <alignment_job_types_json> <per_chunk_processes>", file=sys.stderr)
+        print(
+            "Usage: process_map_chunk_batchtools.py <chunk_file> <chunk_idx> "
+            "<chunk_dir> <alignment_job_types_json> <per_chunk_processes>",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    
+
     chunk_file = sys.argv[1]
     chunk_idx = int(sys.argv[2])
     chunk_dir = sys.argv[3]
     alignment_job_types_json = sys.argv[4]
     per_chunk_processes = int(sys.argv[5])
-    
+
     return chunk_file, chunk_idx, chunk_dir, alignment_job_types_json, per_chunk_processes
 
 
 def main():
-    """Main function to process a single chunk."""
+    """Main entry: process a single mapping chunk."""
     chunk_file, chunk_idx, chunk_dir, alignment_job_types_json, per_chunk_processes = parse_arguments()
-    
+
     try:
-        process_chunk_standalone(chunk_file, chunk_idx, chunk_dir, alignment_job_types_json, per_chunk_processes)
+        process_map_chunk_standalone(
+            chunk_file, chunk_idx, chunk_dir, alignment_job_types_json, per_chunk_processes
+        )
         print(f"SUCCESS: Chunk {chunk_idx} processed", file=sys.stderr)
         sys.exit(0)
     except Exception as e:
@@ -94,4 +98,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

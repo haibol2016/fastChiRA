@@ -1,0 +1,35 @@
+# Pinned runtime deps for the Docker image (and optional local micromamba envs).
+# Versions match a known-good chiraplus build (Biopython 1.87 + bcbio-gff 0.7.1).
+# Pin package versions only (not build strings) so linux/amd64 and linux/arm64 resolve.
+#
+# Refresh after a successful image build:
+#   docker run --rm chiraplus micromamba list -n base
+#   docker run --rm chiraplus python -c "import importlib.metadata as m; print(m.version('bcbio-gff'))"
+#
+# Note: bioconda "bcbiogff" tops out at 0.6.6 and breaks with Biopython >= 1.81;
+# install bcbio-gff from PyPI via the pip section below.
+
+name: base
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.11.15
+  - biopython=1.87
+  - pysam=0.24.0
+  - requests=2.34.2
+  - pyliftover=0.4.1
+  - psutil=7.2.2
+  - mpire=2.10.2
+  - bwa=0.7.19
+  - samtools=1.24
+  - bedtools=2.31.1
+  - gffread=0.12.9
+  - intarna=3.4.1
+  - r-base=4.5.2
+  - r-batchtools=0.9.18
+  - r-jsonlite=2.0.0
+  - pip
+  - pip:
+      - bcbio-gff==0.7.1

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Setup script for ChiRA. Prefer installing via: pip install .
+"""Setup script for fastChiRA. Prefer installing via: pip install .
 
 Primary metadata is also declared in pyproject.toml for modern tooling.
 """
@@ -36,10 +36,10 @@ def read_readme():
 setup(
     name="chira",
     version=read_version(),
-    description="Chimeric Read Analyzer - Tools for analyzing RNA-RNA interactome data",
+    description="fastChiRA - Chimeric Read Analyzer for RNA-RNA interactome data",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
-    author="ChiRA Contributors",
+    author="fastChiRA Contributors",
     url="https://github.com/haibol2016/chira",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
@@ -74,7 +74,7 @@ setup(
             "download_mirbase_mature.py=chira.utils.download_mirbase_mature:main",
             "extract_transcripts_from_genome.py=chira.utils.extract_transcripts_from_genome:main",
             "remove_mirna_hairpin_from_gtf.py=chira.utils.remove_mirna_hairpin_from_gtf:main",
-            "process_chunk_batchtools.py=chira.batchtools.process_chunk:main",
+            "process_map_chunk_batchtools.py=chira.batchtools.process_map_chunk:main",
             "process_intarna_chunk_batchtools.py=chira.batchtools.process_intarna_chunk:main",
             "merge_intarna_into_chimeras.py=chira.batchtools.merge_intarna:main",
         ],

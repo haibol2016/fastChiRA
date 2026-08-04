@@ -1,24 +1,27 @@
-# Ignore files that shouldn't be in Docker image
+# Build context exclusions (keep README.md / LICENSE / packaging for pip install)
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
 *.so
 *.egg
 *.egg-info/
+.eggs/
 dist/
 build/
 .git/
 .gitignore
+.venv/
+venv/
+docs/
+CHANGELOG.md
 *.swp
 *.swo
 *~
 .DS_Store
 *.log
+*.tmp
+*.bak
 test/
 tests/
 *.test.py
-*.tmp
-*.bak
 

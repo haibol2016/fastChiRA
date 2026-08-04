@@ -1,9 +1,18 @@
 # Changelog
 
-All notable changes to ChiRA will be documented in this file.
+All notable changes to fastChiRA will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.4.15] - 2026-08-03
+
+### Changed
+- Reorganized as a standard `src/chira/` Python package (`pyproject.toml`, console entry points; CLI names unchanged).
+- Renamed map batchtools worker to `process_map_chunk` / `process_map_chunk_batchtools.py` (alongside `process_intarna_chunk`).
+- Consolidated docs under `docs/` (`install.md`, `cli.md`, `batchtools.md`, `containers.md`); refreshed README (improvements vs upstream ChiRA, install, workflow).
+- Dockerfile installs the package from `src/`; dropped unused `r-future` / `r-future.apply`.
+- Pinned container deps in `environment.yml` (Dockerfile installs from it). Install `bcbio-gff==0.7.1` via pip — bioconda `bcbiogff` 0.6.6 breaks with Biopython ≥1.81.
 
 ## [1.4.14] - 2026-02-25
 
@@ -210,7 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Handles GFF3 1-based coordinates correctly (converts to 0-based for pyliftover, back to 1-based for output)
     - Updates chromosome names if they change during liftover
     - Features that cannot be lifted over retain their original coordinates
-  - Can be used directly with ChiRA (no GTF conversion needed)
+  - Can be used directly with fastChiRA (no GTF conversion needed)
   - Parameters: `--species`, `--output`, `--mirbase-version`, `--chromosome_mapping`, `--source-genome`, `--target-genome`, `--chain-file`
 
 - **concatenate_fasta.py** (new utility script):
@@ -246,7 +255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Includes bioinformatics tools (bwa, samtools, bedtools, intarna)
   - Sets up proper environment variables and PATH
   - Makes Python scripts executable
-  - Supports containerized execution of ChiRA pipeline
+  - Supports containerized execution of fastChiRA pipeline
 
 ### Changed
 - **chira_collapse.py**:
@@ -437,7 +446,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Handles coordinate conversion correctly (GFF3 1-based to pyliftover 0-based and back)
     - Updates chromosome names if changed during liftover
   - **Chromosome name mapping**: Rename chromosomes based on a mapping file
-  - Can be used directly with ChiRA (no GTF conversion needed)
+  - Can be used directly with fastChiRA (no GTF conversion needed)
 - **concatenate_fasta.py**: Concatenate multiple FASTA files into a single file
   - Handles various FASTA header formats
   - Useful for combining miRNA and target transcriptome FASTA files
@@ -460,10 +469,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Makes Python scripts executable
   - Includes entrypoint script that automatically sets up conda environment, PATH, and PYTHONPATH
   - Symlinks all conda binaries to `/usr/local/bin` for universal PATH access
-  - Ready-to-use containerized environment for ChiRA pipeline
+  - Ready-to-use containerized environment for fastChiRA pipeline
 
 ### Singularity/Apptainer Support
-- **SINGULARITY_SETUP.md**: Comprehensive guide for using ChiRA with Singularity/Apptainer containers
+- **SINGULARITY_SETUP.md**: Comprehensive guide for using fastChiRA with Singularity/Apptainer containers
   - Installation instructions for Linux and macOS
   - Docker image to Singularity conversion methods
   - Environment setup using entrypoint script (recommended approach)

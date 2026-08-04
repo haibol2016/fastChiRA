@@ -3,7 +3,7 @@
 # Usage: Rscript submit_chunks_batchtools.R <config_json> <chunks_json>
 #
 # This script uses batchtools to submit LSF jobs for each chunk.
-# Each job runs process_chunk_batchtools.py to process one chunk.
+# Each job runs process_map_chunk_batchtools.py (chira.batchtools.process_map_chunk) to process one chunk.
 
 suppressPackageStartupMessages({
   library(batchtools)
@@ -136,7 +136,7 @@ if (template_file == "lsf-simple" || file.exists(template_file)) {
 }
 
 # Define job function
-process_chunk_job <- function(chunk_file, chunk_idx, chunk_dir, 
+process_map_chunk_job <- function(chunk_file, chunk_idx, chunk_dir, 
                               alignment_job_types_json, per_chunk_processes, 
                               python_script, conda_env) {
   # Build command
@@ -193,7 +193,7 @@ resources <- list(
 # Submit jobs
 # batchtools batchMap() supports more.args parameter for constant arguments
 ids <- batchMap(
-  fun = process_chunk_job,
+  fun = process_map_chunk_job,
   chunk_file = chunks$chunk_file,
   chunk_idx = chunks$chunk_idx,
   more.args = list(

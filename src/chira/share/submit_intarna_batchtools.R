@@ -99,7 +99,7 @@ if (is.null(reg$cluster.functions)) {
   stop("ERROR: Cluster functions are NULL after configuration!")
 }
 
-# Job function: run Python worker for one chunk (same pattern as process_chunk_job in submit_chunks_batchtools.R)
+# Job function: run Python worker for one chunk (same pattern as process_map_chunk_job in submit_chunks_batchtools.R)
 process_intarna_chunk_job <- function(chunk_idx, batchtools_work_dir, python_script,
                                       intarna_params, conda_env, ncpus) {
   chunk_dir <- file.path(batchtools_work_dir, as.character(chunk_idx))

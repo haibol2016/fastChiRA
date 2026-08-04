@@ -722,7 +722,7 @@ def submit_chunks_with_batchtools(args, chunk_files, chunk_dir, alignment_job_ty
                 # Fallback to built-in if custom template not found
                 template_file = "lsf-simple"
                 print(f"WARNING: lsf_custom.tmpl not found at {default_template}. Using built-in 'lsf-simple' template.", file=sys.stderr)
-        from chira.batchtools import process_chunk as _process_chunk_mod
+        from chira.batchtools import process_map_chunk as _process_map_chunk_mod
         config = {
             "reg_dir": reg_dir,
             "queue": args.batchtools_queue,
@@ -730,7 +730,7 @@ def submit_chunks_with_batchtools(args, chunk_files, chunk_dir, alignment_job_ty
             "memory_per_job": memory_per_job,
             "walltime": args.batchtools_walltime,
             "conda_env": conda_env,
-            "python_script": os.path.abspath(_process_chunk_mod.__file__),
+            "python_script": os.path.abspath(_process_map_chunk_mod.__file__),
             "chunk_dir": chunk_dir,
             "alignment_job_types_json": json.dumps(alignment_job_types_list),
             "per_chunk_processes": per_chunk_processes,
@@ -748,7 +748,7 @@ def submit_chunks_with_batchtools(args, chunk_files, chunk_dir, alignment_job_ty
         # All paths must be absolute:
         # - reg_dir: Registry directory (already absolute from above)
         # - chunk_dir: Directory containing chunks (already absolute from above)
-        # - python_script: Path to process_chunk_batchtools.py script
+        # - python_script: Path to process_map_chunk.py worker
         # - template_file: LSF template file path (if not built-in "lsf-simple")
         # - chunk_file paths in chunks_data: Already converted to absolute above
         # - refindex paths in alignment_job_types_list: Already converted to absolute above

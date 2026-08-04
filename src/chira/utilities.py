@@ -14,7 +14,7 @@ from Bio import SeqIO
 from datetime import datetime
 
 # Version number - single source of truth for all ChiRA scripts
-__version__ = "1.4.14"
+__version__ = "1.4.15"
 
 # Directory containing R scripts and LSF templates shipped with the package
 _SHARE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "share")

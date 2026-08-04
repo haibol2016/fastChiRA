@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chira"
 dynamic = ["version"]
-description = "Chimeric Read Analyzer - Tools for analyzing RNA-RNA interactome data"
+description = "fastChiRA - Chimeric Read Analyzer for RNA-RNA interactome data"
 readme = "README.md"
 requires-python = ">=3.6"
 license = { text = "GPL-3.0-or-later" }
-authors = [{ name = "ChiRA Contributors" }]
+authors = [{ name = "fastChiRA Contributors" }]
 keywords = ["bioinformatics", "RNA", "chimeric", "CLASH", "CLIP"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -53,7 +53,7 @@ Homepage = "https://github.com/haibol2016/chira"
 "download_mirbase_mature.py" = "chira.utils.download_mirbase_mature:main"
 "extract_transcripts_from_genome.py" = "chira.utils.extract_transcripts_from_genome:main"
 "remove_mirna_hairpin_from_gtf.py" = "chira.utils.remove_mirna_hairpin_from_gtf:main"
-"process_chunk_batchtools.py" = "chira.batchtools.process_chunk:main"
+"process_map_chunk_batchtools.py" = "chira.batchtools.process_map_chunk:main"
 "process_intarna_chunk_batchtools.py" = "chira.batchtools.process_intarna_chunk:main"
 "merge_intarna_into_chimeras.py" = "chira.batchtools.merge_intarna:main"
 
